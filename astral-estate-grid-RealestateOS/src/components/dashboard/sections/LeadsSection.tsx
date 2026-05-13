@@ -78,7 +78,15 @@ export function LeadsSection() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="font-semibold truncate">{l.name}</span>
-                    {l.verified && <ShieldCheck className="h-3.5 w-3.5 text-[oklch(0.82_0.2_150)]" />}
+                    {l.verified && (
+                      <Badge
+                        variant="outline"
+                        className="shrink-0 border-[oklch(0.82_0.2_150_/_0.5)] bg-[oklch(0.82_0.2_150_/_0.1)] text-[oklch(0.82_0.2_150)] text-[10px] gap-0.5 py-0 h-5"
+                      >
+                        <ShieldCheck className="h-3 w-3" />
+                        Verified
+                      </Badge>
+                    )}
                   </div>
                   <div className="text-xs text-muted-foreground truncate">{l.phone}</div>
                 </div>

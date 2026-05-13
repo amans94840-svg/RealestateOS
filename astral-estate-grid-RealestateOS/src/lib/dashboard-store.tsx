@@ -82,7 +82,7 @@ type Ctx = {
   user: UserProfile;
   login: (payload: { email: string; name?: string; role?: string; company?: string }) => void;
   logout: () => void;
-  updateUserProfile: (patch: Partial<UserProfile>) => void;
+  updateUserProfile: (patch: Partial<UserProfile>, opts?: { silent?: boolean }) => void;
   authReady: boolean;
 };
 
@@ -220,21 +220,23 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     toast("Logged out", { description: "Session ended." });
   }, [persistAuth, pushActivity]);
 
-  const updateUserProfile = useCallback((patch: Partial<UserProfile>) => {
+  const updateUserProfile = useCallback((patch: Partial<UserProfile>, opts?: { silent?: boolean }) => {
     setUser(prev => {
       const next: UserProfile = {
         ...prev,
         ...patch,
         avatar: patch.avatar ?? initials(patch.name ?? prev.name),
       };
-      if (next.name !== prev.name) {
-        pushActivity(`Profile name updated: ${prev.name} → ${next.name}`, "user", "profile");
-      }
-      if (next.role !== prev.role) {
-        pushActivity(`Profile role updated: ${prev.role} → ${next.role}`, "shield-check", "profile");
+      if (!opts?.silent) {
+        if (next.name !== prev.name) {
+          pushActivity(`Profile name updated: ${prev.name} → ${next.name}`, "user", "profile");
+        }
+        if (next.role !== prev.role) {
+          pushActivity(`Profile role updated: ${prev.role} → ${next.role}`, "shield-check", "profile");
+        }
+        toast.success("Profile updated");
       }
       persistUser(next);
-      toast.success("Profile updated");
       return next;
     });
   }, [persistUser, pushActivity]);
@@ -259,4 +261,4 @@ export function useDashboard() {
   return v;
 }
 
-export type { SectionKey, LeadFilters };
+export type { SectionKey, LeadFilters, UserPermission };

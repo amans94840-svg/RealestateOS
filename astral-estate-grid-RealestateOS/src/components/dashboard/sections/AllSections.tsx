@@ -12,6 +12,7 @@ import { Send, Heart, Edit, Share2, Sparkles, Loader2, ShieldCheck, AlertTriangl
 import { toast } from "sonner";
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
 import { SEED_BROKERS } from "@/lib/dashboard-data";
+import { BillingTabPanel } from "@/components/dashboard/settings/BillingTabPanel";
 
 // =============== AI Conversations ===============
 const SAMPLE_CONVS = [
@@ -485,40 +486,8 @@ export function BrokersSection() {
   );
 }
 
-// =============== Investor Intelligence ===============
-const INVEST = [
-  { city: "Dubai Marina", roi: 92, yield: 7.8, app: 14, score: 96 },
-  { city: "Singapore Orchard", roi: 86, yield: 4.9, app: 12, score: 88 },
-  { city: "Mayfair London", roi: 88, yield: 4.2, app: 9, score: 84 },
-  { city: "Manhattan NY", roi: 81, yield: 5.5, app: 11, score: 82 },
-  { city: "Bandra Mumbai", roi: 78, yield: 3.8, app: 13, score: 79 },
-  { city: "Yorkville Toronto", roi: 84, yield: 5.1, app: 10, score: 81 },
-];
-export function InvestorSection() {
-  const [open, setOpen] = useState<string | null>(null);
-  const sel = INVEST.find(i => i.city === open);
-  return (
-    <div>
-      <SectionHeader title="Investor Intelligence & Area Score Breakdown" subtitle="Why we score: ROI, yield, appreciation, liquidity, infrastructure, risk → unified investor confidence" />
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {INVEST.map(i => (
-          <GlowCard key={i.city} onClick={() => setOpen(i.city)}>
-            <div className="flex items-center justify-between">
-              <div className="font-semibold">{i.city}</div>
-              <Badge variant="outline" className="border-primary/40 neon-text">Score {i.score}</Badge>
-            </div>
-            <div className="grid grid-cols-3 gap-2 mt-3">
-              <Mini label="ROI" value={`${i.roi}`} /><Mini label="Yield" value={`${i.yield}%`} /><Mini label="Appr." value={`${i.app}%`} />
-            </div>
-          </GlowCard>
-        ))}
-      </div>
-      <Dialog open={!!sel} onOpenChange={o => !o && setOpen(null)}>
-        <DialogContent className="glass-strong">{sel && <><DialogHeader><DialogTitle>{sel.city} — Investment Analysis</DialogTitle></DialogHeader><p className="text-sm">5-year compound projection: <span className="neon-text font-semibold">+{Math.round(sel.app * 5 * 1.2)}%</span></p><p className="text-sm text-muted-foreground">Yield-stable luxury inventory with strong cross-border demand and low fraud signals.</p></>}</DialogContent>
-      </Dialog>
-    </div>
-  );
-}
+// =============== Investor Intelligence (InvestorIntelligenceSection.tsx) ===============
+export { InvestorSection } from "./InvestorIntelligenceSection";
 
 // =============== Reports ===============
 type ReportDef = { name: string; rows: Array<Record<string, string | number>>; insights: string[] };
@@ -705,10 +674,9 @@ const INTEGRATION_SEED: IntegrationItem[] = [
 ];
 
 type SettingsState = {
-  team: { invite: string; defaultRole: "Admin" | "Manager" | "Broker" | "Viewer" };
+  team: { invite: string; defaultRole: "Admin" | "Manager" | "Broker" | "Analyst" | "Viewer" };
   integrations: { whatsapp: boolean; slack: boolean; hubspot: boolean; zapier: boolean };
   security: { mfa: boolean; sessionTimeout: string; ipAllowlist: string };
-  billing: { plan: "Starter" | "Growth" | "Enterprise"; seats: number; renewal: string };
   notifications: { email: boolean; push: boolean; weeklyDigest: boolean };
   prefs: { country: string; currency: string; locale: string };
   ai: { creativity: number; tone: "Formal" | "Friendly" | "Direct"; autoReply: boolean };
@@ -722,7 +690,6 @@ const DEFAULT_SETTINGS: SettingsState = {
   team: { invite: "", defaultRole: "Broker" },
   integrations: { whatsapp: true, slack: false, hubspot: true, zapier: false },
   security: { mfa: true, sessionTimeout: "30 min", ipAllowlist: "" },
-  billing: { plan: "Enterprise", seats: 24, renewal: "2026-12-01" },
   notifications: { email: true, push: true, weeklyDigest: true },
   prefs: { country: "India", currency: "INR", locale: "en-IN" },
   ai: { creativity: 60, tone: "Friendly", autoReply: true },
@@ -955,7 +922,7 @@ export function SettingsSection() {
             <h3 className="font-semibold mb-3">Invite teammates</h3>
             <div className="flex gap-2"><Input value={s.team.invite} onChange={e => upd("team", { invite: e.target.value })} placeholder="teammate@email.com" className="bg-input/40" /><Button onClick={() => { if (!s.team.invite.includes("@")) { toast.error("Invalid email"); return; } toast.success(`Invite sent to ${s.team.invite}`); upd("team", { invite: "" }); }}>Send Invite</Button></div>
             <div className="mt-4"><div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">Default role for new invites</div>
-              <select value={s.team.defaultRole} onChange={e => upd("team", { defaultRole: e.target.value as SettingsState["team"]["defaultRole"] })} className="bg-input/40 border border-border rounded-md px-3 py-2 text-sm w-full">{["Admin","Manager","Broker","Viewer"].map(r => <option key={r}>{r}</option>)}</select>
+              <select value={s.team.defaultRole} onChange={e => upd("team", { defaultRole: e.target.value as SettingsState["team"]["defaultRole"] })} className="bg-input/40 border border-border rounded-md px-3 py-2 text-sm w-full">{["Admin","Manager","Broker","Analyst","Viewer"].map(r => <option key={r}>{r}</option>)}</select>
             </div>
             <TabSaveBar k="team" />
           </GlowCard>
@@ -1007,13 +974,7 @@ export function SettingsSection() {
         </TabsContent>
 
         <TabsContent value="billing">
-          <GlowCard>
-            <div className="grid grid-cols-3 gap-2"><Mini label="Plan" value={s.billing.plan} /><Mini label="Seats" value={String(s.billing.seats)} /><Mini label="Renewal" value={s.billing.renewal} /></div>
-            <div className="mt-3"><div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">Plan</div>
-              <select value={s.billing.plan} onChange={e => upd("billing", { plan: e.target.value as SettingsState["billing"]["plan"] })} className="bg-input/40 border border-border rounded-md px-3 py-2 text-sm">{["Starter","Growth","Enterprise"].map(p => <option key={p}>{p}</option>)}</select>
-            </div>
-            <TabSaveBar k="billing" />
-          </GlowCard>
+          <BillingTabPanel />
         </TabsContent>
 
         <TabsContent value="notifications">

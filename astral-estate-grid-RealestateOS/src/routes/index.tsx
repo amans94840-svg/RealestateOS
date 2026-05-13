@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { DashboardProvider, useDashboard } from "@/lib/dashboard-store";
+import { BillingProvider } from "@/lib/billing-store";
 import { Sidebar } from "@/components/dashboard/Sidebar";
 import { TopNav } from "@/components/dashboard/TopNav";
 import { AIDrawer } from "@/components/dashboard/AIDrawer";
@@ -8,9 +9,19 @@ import { LeadDetailModal } from "@/components/dashboard/LeadDetailModal";
 import { DashboardSection } from "@/components/dashboard/sections/DashboardSection";
 import { LeadsSection } from "@/components/dashboard/sections/LeadsSection";
 import {
-  AIConversationsSection, PropertiesSection, AppointmentsSection, AIAgentsSection,
-  TrustSection, RevenueSection, BrokersSection, InvestorSection, HeatmapsSection,
-  ReportsSection, SettingsSection, AIInsightsSection, ForecastSection,
+  AIConversationsSection,
+  PropertiesSection,
+  AppointmentsSection,
+  AIAgentsSection,
+  TrustSection,
+  RevenueSection,
+  BrokersSection,
+  InvestorSection,
+  HeatmapsSection,
+  ReportsSection,
+  SettingsSection,
+  AIInsightsSection,
+  ForecastSection,
 } from "@/components/dashboard/sections/AllSections";
 import { Toaster } from "@/components/ui/sonner";
 import { GlowCard } from "@/components/dashboard/utils";
@@ -23,12 +34,18 @@ export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
       { title: "RealEstateOS — AI Real Estate Command Center" },
-      { name: "description", content: "Futuristic AI-powered operating system for brokers, agencies, and global investors." },
+      {
+        name: "description",
+        content:
+          "Futuristic AI-powered operating system for brokers, agencies, and global investors.",
+      },
     ],
   }),
   component: () => (
     <DashboardProvider>
-      <Shell />
+      <BillingProvider>
+        <Shell />
+      </BillingProvider>
     </DashboardProvider>
   ),
 });
@@ -55,7 +72,9 @@ function Shell() {
       <div className="dark min-h-screen flex items-center justify-center p-4">
         <GlowCard className="w-full max-w-md">
           <h1 className="text-2xl font-semibold">RealEstateOS Login</h1>
-          <p className="text-sm text-muted-foreground mt-1">Mock local session for dashboard access.</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            Mock local session for dashboard access.
+          </p>
           <form
             className="space-y-3 mt-4"
             onSubmit={(e) => {
@@ -67,11 +86,33 @@ function Shell() {
               login({ email, name, role, company });
             }}
           >
-            <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" className="bg-input/40" />
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" className="bg-input/40" />
-            <Input value={role} onChange={(e) => setRole(e.target.value)} placeholder="Role" className="bg-input/40" />
-            <Input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Company" className="bg-input/40" />
-            <Button type="submit" className="w-full">Login</Button>
+            <Input
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="Email"
+              className="bg-input/40"
+            />
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Name"
+              className="bg-input/40"
+            />
+            <Input
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+              placeholder="Role"
+              className="bg-input/40"
+            />
+            <Input
+              value={company}
+              onChange={(e) => setCompany(e.target.value)}
+              placeholder="Company"
+              className="bg-input/40"
+            />
+            <Button type="submit" className="w-full">
+              Login
+            </Button>
           </form>
         </GlowCard>
       </div>

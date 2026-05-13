@@ -13,7 +13,7 @@ const NAV: { key: SectionKey; label: string; icon: React.ComponentType<{ classNa
   { key: "ai-conversations", label: "AI Conversations", icon: MessageSquare },
   { key: "properties", label: "Properties", icon: Building2 },
   { key: "appointments", label: "Appointments", icon: Calendar },
-  { key: "investor", label: "Investor & Area Score", icon: TrendingUp },
+  { key: "investor", label: "Investor & Area Growth", icon: TrendingUp },
   { key: "heatmaps", label: "AI Opportunity Map", icon: Map },
   { key: "ai-agents", label: "AI Agents", icon: Bot },
   { key: "trust", label: "Trust Engine", icon: ShieldCheck },
