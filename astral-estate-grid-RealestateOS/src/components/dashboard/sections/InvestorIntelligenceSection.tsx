@@ -287,7 +287,7 @@ export function InvestorSection() {
 
   useEffect(() => {
     let cancelled = false;
-    const tid = { current: 0 as ReturnType<typeof setTimeout> };
+    const tid = { current: 0 as number };
     const loop = () => {
       tid.current = window.setTimeout(() => {
         if (cancelled) return;

@@ -1,9 +1,12 @@
 import { createContext, useContext, useState, useMemo, useCallback, useEffect, type ReactNode } from "react";
 import { toast } from "sonner";
+import type { User } from "@supabase/supabase-js";
 import {
   SEED_LEADS, SEED_PROPERTIES, SEED_APPTS, SEED_ACTIVITY, SEED_NOTIFICATIONS, SEED_INSIGHTS,
   type Lead, type Property, type Appointment, type Activity, type Notification, type InsightItem,
 } from "./dashboard-data";
+import { getSupabase } from "./supabase-client";
+import { fetchUserProfile } from "./supabase-auth";
 
 type SectionKey =
   | "dashboard" | "leads" | "ai-conversations" | "properties" | "appointments"
@@ -80,8 +83,11 @@ type Ctx = {
   totalRevenue: number;
   isAuthenticated: boolean;
   user: UserProfile;
-  login: (payload: { email: string; name?: string; role?: string; company?: string }) => void;
-  logout: () => void;
+  login: (
+    payload: { email: string; name?: string; role?: string; company?: string; replace?: boolean },
+    opts?: { silent?: boolean },
+  ) => void;
+  logout: () => void | Promise<void>;
   updateUserProfile: (patch: Partial<UserProfile>, opts?: { silent?: boolean }) => void;
   authReady: boolean;
 };
@@ -120,7 +126,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserProfile>(DEFAULT_USER);
   const [authReady, setAuthReady] = useState(false);
 
-  useEffect(() => {
+  const loadLocalAuth = useCallback(() => {
     if (typeof window === "undefined") return;
     const nextAuth = window.localStorage.getItem(AUTH_KEY) === "true";
     const raw = window.localStorage.getItem(USER_KEY);
@@ -128,14 +134,17 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     if (raw) {
       try {
         const parsed = JSON.parse(raw) as UserProfile;
-        nextUser = { ...DEFAULT_USER, ...parsed, avatar: parsed.avatar || initials(parsed.name || DEFAULT_USER.name) };
+        nextUser = {
+          ...DEFAULT_USER,
+          ...parsed,
+          avatar: parsed.avatar || initials(parsed.name || DEFAULT_USER.name),
+        };
       } catch {
         nextUser = DEFAULT_USER;
       }
     }
     setUser(nextUser);
     setIsAuthenticated(nextAuth);
-    setAuthReady(true);
   }, []);
 
   const pushActivity = useCallback((text: string, icon = "activity", type = "system") => {
@@ -196,32 +205,109 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     window.localStorage.setItem(USER_KEY, JSON.stringify(next));
   }, []);
 
-  const login = useCallback((payload: { email: string; name?: string; role?: string; company?: string }) => {
-    const nextUser: UserProfile = {
-      ...user,
-      email: payload.email,
-      name: payload.name?.trim() || user.name,
-      role: payload.role?.trim() || user.role,
-      company: payload.company?.trim() || user.company,
-      avatar: initials(payload.name?.trim() || user.name),
-    };
-    setUser(nextUser);
-    setIsAuthenticated(true);
-    persistUser(nextUser);
-    persistAuth(true);
-    pushActivity(`User signed in: ${nextUser.name}`, "user-check", "auth");
-    toast.success("Logged in", { description: `Welcome back, ${nextUser.name}` });
-  }, [persistAuth, persistUser, pushActivity, user]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sb = getSupabase();
+    if (!sb) {
+      loadLocalAuth();
+      setAuthReady(true);
+      return;
+    }
 
-  const logout = useCallback(() => {
+    const applyFromSupabaseUser = async (sessionUser: User, silent: boolean) => {
+      const profile = await fetchUserProfile(sb, sessionUser.id);
+      const meta = sessionUser.user_metadata as Record<string, string | undefined>;
+      const name = profile?.full_name || meta?.full_name || sessionUser.email?.split("@")[0] || "User";
+      const nextUser: UserProfile = {
+        ...DEFAULT_USER,
+        email: sessionUser.email || "",
+        name,
+        role: profile?.role || meta?.role || "Agent",
+        company: profile?.company_name || meta?.company || "",
+        avatar: initials(name),
+      };
+      setUser(nextUser);
+      setIsAuthenticated(true);
+      persistUser(nextUser);
+      persistAuth(true);
+      if (!silent) {
+        pushActivity(`User signed in: ${nextUser.name}`, "user-check", "auth");
+        toast.success("Logged in", { description: `Welcome, ${nextUser.name}` });
+      }
+    };
+
+    const { data } = sb.auth.onAuthStateChange((event, session) => {
+      void (async () => {
+        if (event === "INITIAL_SESSION") {
+          if (session?.user) {
+            await applyFromSupabaseUser(session.user, true);
+          } else {
+            loadLocalAuth();
+          }
+          setAuthReady(true);
+          return;
+        }
+        if (event === "SIGNED_IN" && session?.user) {
+          await applyFromSupabaseUser(session.user, false);
+          return;
+        }
+        if (event === "SIGNED_OUT") {
+          setIsAuthenticated(false);
+          persistAuth(false);
+          setUser(DEFAULT_USER);
+          persistUser(DEFAULT_USER);
+        }
+      })();
+    });
+    return () => {
+      data.subscription.unsubscribe();
+    };
+  }, [loadLocalAuth, persistAuth, persistUser, pushActivity]);
+
+  const login = useCallback(
+    (
+      payload: { email: string; name?: string; role?: string; company?: string; replace?: boolean },
+      opts?: { silent?: boolean },
+    ) => {
+      setUser((prev) => {
+        const base = payload.replace ? DEFAULT_USER : prev;
+        const name = payload.name?.trim() || base.name;
+        const nextUser: UserProfile = {
+          ...base,
+          email: payload.email,
+          name,
+          role: payload.role?.trim() || base.role,
+          company: payload.company?.trim() || base.company,
+          avatar: initials(name),
+        };
+        persistUser(nextUser);
+        return nextUser;
+      });
+      setIsAuthenticated(true);
+      persistAuth(true);
+      if (!opts?.silent) {
+        pushActivity(`User signed in: ${payload.email}`, "user-check", "auth");
+        toast.success("Logged in", { description: "Welcome to RealEstateOS" });
+      }
+    },
+    [persistAuth, persistUser, pushActivity],
+  );
+
+  const logout = useCallback(async () => {
+    const sb = getSupabase();
+    if (sb) {
+      await sb.auth.signOut();
+    }
     setIsAuthenticated(false);
     persistAuth(false);
+    setUser(DEFAULT_USER);
+    persistUser(DEFAULT_USER);
     pushActivity("User signed out", "log-out", "auth");
     toast("Logged out", { description: "Session ended." });
-  }, [persistAuth, pushActivity]);
+  }, [persistAuth, persistUser, pushActivity]);
 
   const updateUserProfile = useCallback((patch: Partial<UserProfile>, opts?: { silent?: boolean }) => {
-    setUser(prev => {
+    setUser((prev) => {
       const next: UserProfile = {
         ...prev,
         ...patch,

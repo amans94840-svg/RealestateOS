@@ -16,7 +16,7 @@ const NAV: { key: SectionKey; label: string; icon: React.ComponentType<{ classNa
   { key: "investor", label: "Investor & Area Growth", icon: TrendingUp },
   { key: "heatmaps", label: "AI Opportunity Map", icon: Map },
   { key: "ai-agents", label: "AI Agents", icon: Bot },
-  { key: "trust", label: "Trust Engine", icon: ShieldCheck },
+  { key: "trust", label: "Trust & Risk", icon: ShieldCheck },
   { key: "revenue", label: "Revenue Analytics", icon: DollarSign },
   { key: "brokers", label: "Broker Performance", icon: Trophy },
   { key: "reports", label: "Reports", icon: FileText },

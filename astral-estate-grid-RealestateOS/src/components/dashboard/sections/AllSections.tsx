@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
-import { Send, Heart, Edit, Share2, Sparkles, Loader2, ShieldCheck, AlertTriangle, Building2, Calendar as CalIcon, Plus, FileText, Download, MapPin } from "lucide-react";
+import { Send, Heart, Edit, Share2, Sparkles, Loader2, Calendar as CalIcon, Plus, FileText, Download, MapPin } from "lucide-react";
 import { toast } from "sonner";
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
 import { SEED_BROKERS } from "@/lib/dashboard-data";
@@ -375,45 +375,8 @@ export function AIAgentsSection() {
   );
 }
 
-// =============== Trust Engine ===============
-const TRUST_CARDS = [
-  { name: "Ownership Verification", icon: ShieldCheck, score: 98 },
-  { name: "Builder / Developer Reputation", icon: Building2, score: 92 },
-  { name: "Legal Risk", icon: AlertTriangle, score: 12, inverse: true },
-  { name: "Fraud Detection", icon: ShieldCheck, score: 4, inverse: true },
-  { name: "Property Trust Score", icon: ShieldCheck, score: 95 },
-  { name: "Cross-border Buyer Risk", icon: AlertTriangle, score: 18, inverse: true },
-];
-
-export function TrustSection() {
-  const [verifying, setVerifying] = useState<number | null>(null);
-  const [verified, setVerified] = useState<number[]>([]);
-  return (
-    <div>
-      <SectionHeader title="Trust Engine" subtitle="Verification, fraud signals, cross-border risk" />
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {TRUST_CARDS.map((c, i) => {
-          const isGood = c.inverse ? c.score < 30 : c.score > 70;
-          return (
-            <GlowCard key={c.name}>
-              <div className="flex items-center justify-between">
-                <c.icon className={`h-6 w-6 ${isGood ? "text-[oklch(0.82_0.2_150)]" : "text-destructive"}`} />
-                {verified.includes(i) && <Badge variant="outline" className="border-[oklch(0.82_0.2_150_/_0.5)] text-[oklch(0.82_0.2_150)]"><ShieldCheck className="h-3 w-3" /> Verified</Badge>}
-              </div>
-              <div className="mt-3 font-semibold">{c.name}</div>
-              <div className={`text-3xl font-bold mt-1 ${isGood ? "text-[oklch(0.82_0.2_150)]" : "text-destructive"}`}>{c.score}{c.inverse ? "%" : "/100"}</div>
-              <div className="flex gap-2 mt-3">
-                <Button size="sm" variant="outline" disabled={verifying === i} onClick={() => { setVerifying(i); setTimeout(() => { setVerifying(null); toast.success("Verification complete"); }, 1100); }}>{verifying === i ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Running</> : "Run Verification"}</Button>
-                <Button size="sm" variant="outline" onClick={() => toast("Risk report opened")}>Report</Button>
-                <Button size="sm" variant="outline" onClick={() => { setVerified(v => [...v, i]); toast.success("Marked verified"); }}>Mark</Button>
-              </div>
-            </GlowCard>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
+// =============== Property Trust & Risk Verification Engine ===============
+export { TrustSection } from "./TrustEngineSection";
 
 // =============== Revenue Analytics ===============
 export function RevenueSection() {
