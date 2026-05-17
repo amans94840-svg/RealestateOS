@@ -90,6 +90,8 @@ type Ctx = {
   logout: () => void | Promise<void>;
   updateUserProfile: (patch: Partial<UserProfile>, opts?: { silent?: boolean }) => void;
   authReady: boolean;
+  passwordRecovery: boolean;
+  clearPasswordRecovery: () => void;
 };
 
 const DashboardContext = createContext<Ctx | null>(null);
@@ -125,6 +127,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [user, setUser] = useState<UserProfile>(DEFAULT_USER);
   const [authReady, setAuthReady] = useState(false);
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
 
   const loadLocalAuth = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -251,11 +254,17 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
           await applyFromSupabaseUser(session.user, false);
           return;
         }
+        if (event === "PASSWORD_RECOVERY") {
+          setPasswordRecovery(true);
+          setAuthReady(true);
+          return;
+        }
         if (event === "SIGNED_OUT") {
           setIsAuthenticated(false);
           persistAuth(false);
           setUser(DEFAULT_USER);
           persistUser(DEFAULT_USER);
+          setPasswordRecovery(false);
         }
       })();
     });
@@ -306,6 +315,8 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     toast("Logged out", { description: "Session ended." });
   }, [persistAuth, persistUser, pushActivity]);
 
+  const clearPasswordRecovery = useCallback(() => setPasswordRecovery(false), []);
+
   const updateUserProfile = useCallback((patch: Partial<UserProfile>, opts?: { silent?: boolean }) => {
     setUser((prev) => {
       const next: UserProfile = {
@@ -336,6 +347,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     insights, updateInsight,
     selectedLeadId, setSelectedLeadId, leadFilters, setLeadFilters, totalRevenue,
     isAuthenticated, user, login, logout, updateUserProfile, authReady,
+    passwordRecovery, clearPasswordRecovery,
   };
 
   return <DashboardContext.Provider value={value}>{children}</DashboardContext.Provider>;

@@ -61,19 +61,6 @@ export function AuthFuturisticBackground() {
           backgroundSize: "48px 48px",
         }}
       />
-
-      <div className="absolute right-[8%] top-[22%] hidden w-56 rounded-2xl border border-white/10 bg-white/[0.04] p-3 shadow-2xl backdrop-blur-md md:block">
-        <div className="text-[10px] uppercase tracking-widest text-white/40">Live pipeline</div>
-        <div className="mt-2 h-1.5 rounded-full bg-white/10">
-          <div className="h-full w-[72%] rounded-full bg-gradient-to-r from-violet-400/80 to-sky-400/80" />
-        </div>
-        <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-white/50">
-          <span>Deals</span>
-          <span className="text-right text-emerald-300/90">+12%</span>
-          <span>AI tasks</span>
-          <span className="text-right text-violet-300/90">248</span>
-        </div>
-      </div>
     </div>
   );
 }
