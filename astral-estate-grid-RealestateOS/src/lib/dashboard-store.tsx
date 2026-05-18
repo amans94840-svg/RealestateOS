@@ -179,7 +179,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
 
   const addAppointment = useCallback((a: Appointment) => {
     setAppointments(prev => [a, ...prev]);
-    pushActivity(`Site visit booked: ${a.leadName}`, "calendar", "visit");
+    pushActivity(`New appointment booked with ${a.leadName}`, "calendar", "visit");
   }, [pushActivity]);
 
   const updateAppointment = useCallback((id: string, patch: Partial<Appointment>) => {

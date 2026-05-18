@@ -25,24 +25,97 @@ export type Property = {
   title: string;
   country: string;
   city: string;
+  area?: string;
+  address?: string;
   price: string;
-  type: string;
+  currency?: string;
+  priceRange?: string;
+  priceUnit?: string;
+  pricePerUnit?: string;
+  bookingAmount?: string;
+  maintenanceCharges?: string;
+  paymentPlan?: string;
+  propertyType?: string;
+  listingType?: string;
+  bedrooms?: number;
+  bathrooms?: number;
+  balconies?: string;
+  size?: string;
+  areaUnit?: string;
+  floor?: string;
+  totalFloors?: string;
+  furnishing?: string;
+  parking?: string;
+  facing?: string;
+  possessionStatus?: string;
+  status?: string;
   roi: number;
-  yield: number;
-  appreciation: number;
+  /** Rental yield percent */
+  rentalYield?: number;
+  /** Yearly appreciation forecast percent */
+  appreciationForecast?: number;
+  description?: string;
+  nearbyPlaces?: string[];
+  locationAdvantages?: string[];
+  ownershipType?: string;
+  reraStatus?: string;
+  verificationStatus?: string;
+  visibility?: string;
+  priority?: string;
+  tags?: string[];
+  amenities?: string[];
+  aiSummary?: string;
+  aiInvestmentNote?: string;
+  bestBuyerType?: string;
+  /** Primary cover image URL (R2/Supabase Storage ready) */
+  imageUrl?: string;
+  /** Additional gallery image URLs (R2/Supabase Storage ready) */
+  galleryImages?: string[];
+  /** Badge source */
+  verified?: boolean;
+  trustScore?: number;
+  roiScore?: number;
+  developerName?: string;
+  assignedBroker?: string;
+  isFeatured?: boolean;
+  isHotDeal?: boolean;
+  isGlobalProperty?: boolean;
+  createdAt?: number;
+  updatedAt?: number;
+
+  /** Legacy fields used by older UI bits */
+  type?: string;
+  yield?: number;
+  appreciation?: number;
   image: string;
   favorite?: boolean;
 };
 
 export type Appointment = {
   id: string;
+  leadId?: string;
   leadName: string;
+  phone?: string;
+  email?: string;
+  country?: string;
+  city?: string;
+  buyerType?: string;
+  budget?: string;
+  leadSource?: string;
+  urgency?: "Critical" | "High" | "Medium" | "Low";
+  appointmentType?: "Site Visit" | "Call" | "Video Meeting" | "Office Meeting" | "Follow-up";
   property: string;
+  propertyId?: string;
   date: string;
   time: string;
-  status: "Confirmed" | "Pending" | "Cancelled" | "Rescheduled";
-  broker?: string;
+  duration?: string;
+  meetingLocation?: string;
   notes?: string;
+  status: "Confirmed" | "Pending" | "Cancelled" | "Rescheduled";
+  assignedBroker?: string;
+  broker?: string;
+  createdAt?: number;
+  updatedAt?: number;
 };
 
 export type InsightItem = {
@@ -87,10 +160,6 @@ export const COUNTRIES: { name: string; code: string; flag: string }[] = [
   { name: "Germany", code: "+49", flag: "🇩🇪" },
   { name: "France", code: "+33", flag: "🇫🇷" },
   { name: "Qatar", code: "+974", flag: "🇶🇦" },
-  { name: "Oman", code: "+968", flag: "🇴🇲" },
-  { name: "Kuwait", code: "+965", flag: "🇰🇼" },
-  { name: "Bahrain", code: "+973", flag: "🇧🇭" },
-  { name: "South Africa", code: "+27", flag: "🇿🇦" },
 ];
 
 export const BUDGETS = ["Below $100K", "$100K – $250K", "$250K – $500K", "$500K – $1M", "$1M – $2M", "$2M – $5M", "$5M+"];
@@ -141,12 +210,162 @@ export const SEED_LEADS: Lead[] = [
 ];
 
 export const SEED_PROPERTIES: Property[] = [
-  { id: id(), title: "Marina Skyline Penthouse", country: "UAE", city: "Dubai Marina", price: "$3.4M", type: "Luxury Home", roi: 92, yield: 7.8, appreciation: 14, image: "🏙️" },
-  { id: id(), title: "Belgravia Heritage Townhouse", country: "UK", city: "London", price: "$8.9M", type: "Luxury Home", roi: 88, yield: 4.2, appreciation: 9, image: "🏛️" },
-  { id: id(), title: "Hudson Yards Loft", country: "USA", city: "New York", price: "$2.1M", type: "Apartment", roi: 81, yield: 5.5, appreciation: 11, image: "🌆" },
-  { id: id(), title: "Orchard Residences Tower", country: "Singapore", city: "Orchard", price: "$1.7M", type: "Apartment", roi: 86, yield: 4.9, appreciation: 12, image: "🏢" },
-  { id: id(), title: "Bandra West Sea-View", country: "India", city: "Mumbai", price: "$1.2M", type: "Apartment", roi: 78, yield: 3.8, appreciation: 13, image: "🌅" },
-  { id: id(), title: "Yorkville Modern Estate", country: "Canada", city: "Toronto", price: "$4.5M", type: "Villa", roi: 84, yield: 5.1, appreciation: 10, image: "🏡" },
+  {
+    id: id(),
+    title: "Marina Skyline Penthouse",
+    country: "UAE",
+    city: "Dubai Marina",
+    area: "Dubai Marina · Marina Walk",
+    address: "Marina Skyline Tower, Dubai Marina",
+    price: "$3.4M",
+    currency: "USD",
+    propertyType: "Luxury Home",
+    bedrooms: 3,
+    bathrooms: 4,
+    size: "2,650 sq ft",
+    status: "Verified",
+    roi: 92,
+    rentalYield: 7.8,
+    appreciationForecast: 14,
+    appreciation: 14,
+    yield: 7.8,
+    description: "A high-floor penthouse with skyline views and premium rental demand.",
+    imageUrl: undefined,
+    galleryImages: [],
+    verified: true,
+    type: "Luxury Home",
+    image: "🏙️",
+  },
+  {
+    id: id(),
+    title: "Belgravia Heritage Townhouse",
+    country: "UK",
+    city: "London",
+    area: "Belgravia · Grosvenor Crescent",
+    address: "Belgravia Heritage, London",
+    price: "$8.9M",
+    currency: "GBP",
+    propertyType: "Luxury Home",
+    bedrooms: 4,
+    bathrooms: 3,
+    size: "3,420 sq ft",
+    status: "Verified",
+    roi: 88,
+    rentalYield: 4.2,
+    appreciationForecast: 9,
+    appreciation: 9,
+    yield: 4.2,
+    description: "Classic heritage finishes with modern upgrades in a prime neighborhood.",
+    imageUrl: undefined,
+    galleryImages: [],
+    verified: true,
+    type: "Luxury Home",
+    image: "🏛️",
+  },
+  {
+    id: id(),
+    title: "Hudson Yards Loft",
+    country: "USA",
+    city: "New York",
+    area: "Hudson Yards · West Side",
+    address: "Hudson Yards Residences, New York",
+    price: "$2.1M",
+    currency: "USD",
+    propertyType: "Apartment",
+    bedrooms: 2,
+    bathrooms: 2,
+    size: "1,420 sq ft",
+    status: "Active",
+    roi: 81,
+    rentalYield: 5.5,
+    appreciationForecast: 11,
+    appreciation: 11,
+    yield: 5.5,
+    description: "A bright, flexible loft in a premium submarket with resilient demand.",
+    imageUrl: undefined,
+    galleryImages: [],
+    verified: false,
+    type: "Apartment",
+    image: "🌆",
+  },
+  {
+    id: id(),
+    title: "Orchard Residences Tower",
+    country: "Singapore",
+    city: "Orchard",
+    area: "Orchard · Orchard Boulevard",
+    address: "Orchard Residences, Singapore",
+    price: "$1.7M",
+    currency: "SGD",
+    propertyType: "Apartment",
+    bedrooms: 2,
+    bathrooms: 2,
+    size: "1,180 sq ft",
+    status: "Active",
+    roi: 86,
+    rentalYield: 4.9,
+    appreciationForecast: 12,
+    appreciation: 12,
+    yield: 4.9,
+    description: "Turnkey residence with premium transit access and sustained tenant demand.",
+    imageUrl: undefined,
+    galleryImages: [],
+    verified: false,
+    type: "Apartment",
+    image: "🏢",
+  },
+  {
+    id: id(),
+    title: "Bandra West Sea-View",
+    country: "India",
+    city: "Mumbai",
+    area: "Bandra West · Sea Ridge",
+    address: "Bandra West Sea-View, Mumbai",
+    price: "$1.2M",
+    currency: "USD",
+    propertyType: "Apartment",
+    bedrooms: 2,
+    bathrooms: 2,
+    size: "1,050 sq ft",
+    status: "Active",
+    roi: 78,
+    rentalYield: 3.8,
+    appreciationForecast: 13,
+    appreciation: 13,
+    yield: 3.8,
+    description: "Sea-view-facing unit with competitive entry pricing for long-term growth.",
+    imageUrl: undefined,
+    galleryImages: [],
+    verified: false,
+    type: "Apartment",
+    image: "🌅",
+  },
+  {
+    id: id(),
+    title: "Yorkville Modern Estate",
+    country: "Canada",
+    city: "Toronto",
+    area: "Yorkville · Bloor Corridor",
+    address: "Yorkville Modern Estate, Toronto",
+    price: "$4.5M",
+    currency: "USD",
+    propertyType: "Villa",
+    bedrooms: 3,
+    bathrooms: 3,
+    size: "2,980 sq ft",
+    status: "Verified",
+    roi: 84,
+    rentalYield: 5.1,
+    appreciationForecast: 10,
+    appreciation: 10,
+    yield: 5.1,
+    description: "Modern estate with resilient rental demand and long-term appreciation upside.",
+    imageUrl: undefined,
+    galleryImages: [],
+    verified: true,
+    type: "Villa",
+    image: "🏡",
+  },
 ];
 
 export const SEED_APPTS: Appointment[] = [

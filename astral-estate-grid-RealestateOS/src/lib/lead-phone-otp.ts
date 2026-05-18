@@ -1,72 +1,75 @@
 /**
- * Lead phone OTP — mock transport for local/dev.
+ * Lead phone validation + formatting.
  *
- * Later: connect `sendOtp` / `resendOtp` with Twilio, MSG91, or Supabase Auth Phone OTP.
- * Later: move `verifyOtp` to a secure backend; validate server-side only. Never ship real OTP
- * secrets to the browser in production.
- *
- * SECURITY: The in-memory store below is for mock/demo only. Remove when wiring a real provider.
+ * OTP is intentionally removed from the manual lead entry flow.
+ * We validate the phone number against country-specific rules and only allow
+ * saving a lead when the number is valid for the selected country.
  */
 
-const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+export type PhoneRule = {
+  /** Country dial code including leading +, e.g. +91 */
+  dialCode: string;
+  /** Allowed national significant digits length range (no + dial code) */
+  nationalMinLength: number;
+  nationalMaxLength: number;
+  /** Example national number (digits only) used for placeholder */
+  exampleNational: string;
+};
 
-const OTP_TTL_MS = 10 * 60 * 1000;
-
-/** phoneNumber key should be full dial string, e.g. +971501234567 */
-const mockOtpByPhone = new Map<string, { otp: string; expiresAt: number }>();
+export const PHONE_RULES: Record<string, PhoneRule> = {
+  "+91": { dialCode: "+91", nationalMinLength: 10, nationalMaxLength: 10, exampleNational: "9876543210" }, // India
+  "+1": { dialCode: "+1", nationalMinLength: 10, nationalMaxLength: 10, exampleNational: "4155552671" }, // USA (and Canada)
+  "+44": { dialCode: "+44", nationalMinLength: 10, nationalMaxLength: 11, exampleNational: "7911123456" }, // UK
+  "+971": { dialCode: "+971", nationalMinLength: 9, nationalMaxLength: 9, exampleNational: "501234567" }, // UAE
+  "+65": { dialCode: "+65", nationalMinLength: 8, nationalMaxLength: 8, exampleNational: "81234567" }, // Singapore
+  "+61": { dialCode: "+61", nationalMinLength: 9, nationalMaxLength: 9, exampleNational: "412345678" }, // Australia
+  "+49": { dialCode: "+49", nationalMinLength: 10, nationalMaxLength: 11, exampleNational: "15123456789" }, // Germany
+  "+33": { dialCode: "+33", nationalMinLength: 9, nationalMaxLength: 9, exampleNational: "612345678" }, // France
+  "+966": { dialCode: "+966", nationalMinLength: 9, nationalMaxLength: 9, exampleNational: "512345678" }, // Saudi Arabia
+  "+974": { dialCode: "+974", nationalMinLength: 8, nationalMaxLength: 8, exampleNational: "33123456" }, // Qatar
+};
 
 export function getNationalDigits(raw: string): string {
   return raw.replace(/\D/g, "");
 }
 
-/** National significant digits only (country code selected separately). */
-export function isValidNationalPhoneDigits(digits: string): boolean {
-  return digits.length >= 7 && digits.length <= 15;
+export function getPhoneRuleForDialCode(dialCode: string): PhoneRule | null {
+  const cleaned = dialCode.replace(/\s/g, "");
+  return PHONE_RULES[cleaned] ?? null;
 }
 
-export function buildFullPhoneNumber(countryDialCode: string, nationalDigits: string): string {
-  const code = countryDialCode.replace(/\s/g, "");
+export function getPhoneMaxNationalLength(dialCode: string): number {
+  return getPhoneRuleForDialCode(dialCode)?.nationalMaxLength ?? 15;
+}
+
+export function getPhonePlaceholder(dialCode: string): string {
+  return getPhoneRuleForDialCode(dialCode)?.exampleNational ?? "National number";
+}
+
+export function sanitizeNationalPhoneInput(raw: string, dialCode: string): string {
+  const digits = getNationalDigits(raw);
+  const maxLen = getPhoneMaxNationalLength(dialCode);
+  return digits.slice(0, maxLen);
+}
+
+export function isValidPhoneNumberForCountry(dialCode: string, nationalDigits: string): boolean {
+  const rule = getPhoneRuleForDialCode(dialCode);
+  if (!rule) return false; // unsupported country → invalid by design
+  if (!nationalDigits) return false;
+  if (!/^\d+$/.test(nationalDigits)) return false;
+  if (nationalDigits.length < rule.nationalMinLength) return false;
+  if (nationalDigits.length > rule.nationalMaxLength) return false;
+  return true;
+}
+
+/**
+ * Build E.164-style output. Input should already be sanitized digits only.
+ * Example: +971 + 501234567 => +971501234567
+ */
+export function formatPhoneE164(dialCode: string, nationalDigits: string): string {
+  const code = dialCode.replace(/\s/g, "");
   const plus = code.startsWith("+") ? code : `+${code}`;
-  return `${plus}${nationalDigits}`;
+  const digits = getNationalDigits(nationalDigits);
+  return `${plus}${digits}`;
 }
 
-export type SendOtpResult =
-  | { ok: true; /** DEV ONLY — never return OTP from real APIs in production */ devMockOtp?: string }
-  | { ok: false; message: string };
-
-/**
- * Request an OTP for the given E.164-style number.
- * Production: POST to your API; do not echo OTP in JSON for non-admin clients.
- */
-export async function sendOtp(phoneNumber: string): Promise<SendOtpResult> {
-  await delay(280);
-  if (!phoneNumber || phoneNumber.replace(/\D/g, "").length < 8) {
-    return { ok: false, message: "Invalid destination" };
-  }
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  mockOtpByPhone.set(phoneNumber, { otp, expiresAt: Date.now() + OTP_TTL_MS });
-  if (import.meta.env.DEV) {
-    return { ok: true, devMockOtp: otp };
-  }
-  return { ok: true };
-}
-
-/**
- * Verify OTP. Production: POST phone + otp to backend; backend returns success/failure.
- * Mock: compares against last `sendOtp` / `resendOtp` for the same phone key.
- */
-export async function verifyOtp(phoneNumber: string, otp: string): Promise<boolean> {
-  await delay(220);
-  const row = mockOtpByPhone.get(phoneNumber);
-  if (!row || Date.now() > row.expiresAt) return false;
-  const cleaned = otp.replace(/\D/g, "");
-  if (cleaned.length !== 6) return false;
-  const ok = row.otp === cleaned;
-  if (ok) mockOtpByPhone.delete(phoneNumber);
-  return ok;
-}
-
-/** Same contract as `sendOtp`; production may hit a dedicated resend endpoint with rate limits. */
-export async function resendOtp(phoneNumber: string): Promise<SendOtpResult> {
-  return sendOtp(phoneNumber);
-}

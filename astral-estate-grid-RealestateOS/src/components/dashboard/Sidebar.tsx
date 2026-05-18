@@ -8,7 +8,7 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 const NAV: { key: SectionKey; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
-  { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { key: "dashboard", label: "Business Command Center", icon: LayoutDashboard },
   { key: "leads", label: "Leads", icon: Users },
   { key: "ai-conversations", label: "AI Conversations", icon: MessageSquare },
   { key: "properties", label: "Properties", icon: Building2 },
@@ -17,11 +17,11 @@ const NAV: { key: SectionKey; label: string; icon: React.ComponentType<{ classNa
   { key: "heatmaps", label: "AI Opportunity Map", icon: Map },
   { key: "ai-agents", label: "AI Agents", icon: Bot },
   { key: "trust", label: "Trust & Risk", icon: ShieldCheck },
-  { key: "revenue", label: "Revenue Analytics", icon: DollarSign },
-  { key: "brokers", label: "Broker Performance", icon: Trophy },
+  { key: "revenue", label: "Revenue Command Center", icon: DollarSign },
+  { key: "brokers", label: "Broker Performance Command Center", icon: Trophy },
   { key: "reports", label: "Reports", icon: FileText },
-  { key: "ai-insights", label: "AI Insights", icon: Sparkles },
-  { key: "forecast", label: "AI Forecasting Engine", icon: LineChart },
+  { key: "ai-insights", label: "AI Intelligence Command Hub", icon: Sparkles },
+  { key: "forecast", label: "AI Market Forecasting Engine", icon: LineChart },
   { key: "settings", label: "Settings", icon: Settings },
 ];
 

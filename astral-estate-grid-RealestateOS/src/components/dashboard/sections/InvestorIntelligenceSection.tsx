@@ -1,29 +1,35 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDashboard } from "@/lib/dashboard-store";
 import {
-  DATA_SOURCE_ROWS,
-  SEED_AREAS,
-  jitterMetric,
-  nowIso,
-  opportunityGradeFromScore,
-  type AreaIntelligence,
-  type MarketUpdateItem,
-} from "@/lib/investor-area-intelligence-model";
-import { fetchAreaIntelligence, subscribeToAreaUpdates } from "@/lib/investor-area-intelligence-api";
+  AREA_GROWTH_SOURCES,
+  SEED_AREA_GROWTH,
+  type AreaGrowthFilters,
+  type AreaGrowthRecord,
+  type AreaGrowthUpdate,
+} from "@/lib/area-growth-model";
+import {
+  createAreaGrowthRecord,
+  deleteAreaGrowthRecord,
+  fetchAreaGrowthData,
+  subscribeToAreaGrowthUpdates,
+  updateAreaGrowthRecord,
+} from "@/lib/area-growth-api";
 import { GlowCard, Mini, SectionHeader } from "../utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import {
   ArrowDownRight,
   ArrowUpRight,
   BarChart3,
+  CalendarRange,
+  CheckCircle2,
+  Copy,
   GitCompareArrows,
   HelpCircle,
   LineChart,
@@ -31,19 +37,20 @@ import {
   Radar,
   RefreshCw,
   Shield,
+  Share2,
   Sparkles,
+  Star,
+  Target,
+  Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-
 const INVESTMENT_GOALS = ["All", "Rental Income", "Capital Appreciation", "Luxury Investment", "Commercial Yield", "Safe Long-Term Hold"] as const;
-const RISK_APPETITE = ["All", "Low", "Medium", "High"] as const;
-const HOLDING = ["All", "1 Year", "3 Years", "5 Years", "10 Years"] as const;
-const BUDGETS = ["All", "Under $500K", "$500K – $1M", "$1M – $3M", "$3M+"] as const;
-const CONF = ["All", "70", "80", "90"] as const;
-
-function nextSyncMs() {
-  return 10_000 + Math.floor(Math.random() * 10_000);
-}
+const RISK_LEVELS = ["All", "Low", "Medium", "High"] as const;
+const GROWTH_STAGES = ["All", "Early Growth", "Emerging Hotspot", "Strong Growth", "Mature Market", "Watchlist"] as const;
+const CONFIDENCE_LEVELS = ["All", "70", "80", "90"] as const;
+const CITIES = ["All", "Dubai", "Noida", "Gurugram", "Singapore", "London", "New York", "Toronto"] as const;
+const COUNTRIES = ["All", "UAE", "India", "Singapore", "UK", "USA", "Canada"] as const;
+const SCORE_FILTERS = ["All", "70+", "80+", "90+"] as const;
 
 function trendIcon(t: "up" | "down" | "flat") {
   if (t === "up") return <ArrowUpRight className="h-3.5 w-3.5 text-[oklch(0.82_0.2_150)]" />;

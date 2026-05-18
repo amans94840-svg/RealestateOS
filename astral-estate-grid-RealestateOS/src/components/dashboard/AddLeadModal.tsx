@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import validator from "validator";
 import { useDashboard } from "@/lib/dashboard-store";
 import {
   COUNTRIES,
@@ -14,12 +15,12 @@ import {
   type Lead,
 } from "@/lib/dashboard-data";
 import {
-  buildFullPhoneNumber,
   getNationalDigits,
-  isValidNationalPhoneDigits,
-  resendOtp,
-  sendOtp,
-  verifyOtp,
+  getPhonePlaceholder,
+  getPhoneMaxNationalLength,
+  formatPhoneE164,
+  isValidPhoneNumberForCountry,
+  sanitizeNationalPhoneInput,
 } from "@/lib/lead-phone-otp";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -30,7 +31,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
-import { Check, ChevronsUpDown, Loader2, ShieldCheck } from "lucide-react";
+import { Check, ChevronsUpDown, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -39,14 +40,101 @@ export function AddLeadModal() {
   const [country, setCountry] = useState(COUNTRIES[0]);
   const [openC, setOpenC] = useState(false);
   const [phone, setPhone] = useState("");
-  const [phoneVerified, setPhoneVerified] = useState(false);
-  const [otpSent, setOtpSent] = useState(false);
-  const [otp, setOtp] = useState("");
-  const [sending, setSending] = useState(false);
-  const [verifying, setVerifying] = useState(false);
-  const [devMockOtp, setDevMockOtp] = useState<string | null>(null);
-  const [resendCooldownUntil, setResendCooldownUntil] = useState<number | null>(null);
-  const [nowTick, setNowTick] = useState(() => Date.now());
+  const nationalDigits = useMemo(() => getNationalDigits(phone), [phone]);
+  const phoneValid = useMemo(() => isValidPhoneNumberForCountry(country.code, nationalDigits), [country.code, nationalDigits]);
+
+  const phonePlaceholder = useMemo(() => getPhonePlaceholder(country.code), [country.code]);
+  const phoneMaxLen = useMemo(() => getPhoneMaxNationalLength(country.code), [country.code]);
+
+  const currencyPrefix = useMemo(() => {
+    switch (country.code) {
+      case "+91":
+        return "INR ";
+      case "+44":
+        return "GBP ";
+      case "+971":
+        return "AED ";
+      case "+65":
+        return "SGD ";
+      case "+61":
+        return "AUD ";
+      case "+49":
+      case "+33":
+        return "EUR ";
+      case "+966":
+        return "SAR ";
+      case "+974":
+        return "QAR ";
+      case "+1":
+      default:
+        return "$";
+    }
+  }, [country.code]);
+
+  const budgetOptions = useMemo(() => BUDGETS.map((b) => b.replace(/\$/g, currencyPrefix)), [currencyPrefix]);
+
+  const PROVIDER_DOMAINS = useMemo(
+    () => ["gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "icloud.com", "proton.me"],
+    [],
+  );
+
+  const TYPO_DOMAIN_MAP = useMemo(
+    () => ({
+      "gmai.com": "gmail.com",
+      "gmial.com": "gmail.com",
+      "yaho.com": "yahoo.com",
+      "yaho.co": "yahoo.com",
+      "outlok.com": "outlook.com",
+      "hotmial.com": "hotmail.com",
+    }),
+    [],
+  );
+
+  function levenshtein(a: string, b: string): number {
+    if (a === b) return 0;
+    const alen = a.length;
+    const blen = b.length;
+    if (alen === 0) return blen;
+    if (blen === 0) return alen;
+
+    const v0 = new Array(blen + 1).fill(0);
+    const v1 = new Array(blen + 1).fill(0);
+    for (let i = 0; i <= blen; i++) v0[i] = i;
+
+    for (let i = 0; i < alen; i++) {
+      v1[0] = i + 1;
+      for (let j = 0; j < blen; j++) {
+        const cost = a[i] === b[j] ? 0 : 1;
+        v1[j + 1] = Math.min(v1[j] + 1, v0[j + 1] + 1, v0[j] + cost);
+      }
+      for (let j = 0; j <= blen; j++) v0[j] = v1[j];
+    }
+    return v1[blen];
+  }
+
+  function getDomainSuggestion(domainRaw: string): string | null {
+    const domain = domainRaw.trim().toLowerCase();
+    if (!domain) return null;
+    if (PROVIDER_DOMAINS.includes(domain)) return null; // already valid provider domain
+    const mapped = (TYPO_DOMAIN_MAP as Record<string, string>)[domain];
+    if (mapped) return mapped;
+
+    const labels = domain.split(".");
+    if (labels.length < 2) return null;
+    const dTld = labels[labels.length - 1] ?? "";
+    const dSld = labels.slice(0, labels.length - 1).join(".");
+
+    for (const provider of PROVIDER_DOMAINS) {
+      const pLabels = provider.split(".");
+      if (pLabels.length !== 2) continue; // keep logic minimal for this app
+      const pTld = pLabels[1];
+      const pSld = pLabels[0];
+
+      // Heuristic: small edit distance in both the SLD and the TLD.
+      if (levenshtein(dSld, pSld) <= 1 && levenshtein(dTld, pTld) <= 1) return provider;
+    }
+    return null;
+  }
 
   const [form, setForm] = useState({
     name: "",
@@ -63,19 +151,61 @@ export function AddLeadModal() {
   });
   const set = (k: keyof typeof form, v: string) => setForm((f) => ({ ...f, [k]: v }));
 
-  const nationalDigits = useMemo(() => getNationalDigits(phone), [phone]);
-  const phoneValid = isValidNationalPhoneDigits(nationalDigits);
+  const emailValidForRealTime = useMemo(() => {
+    const email = form.email;
+    if (!email) return false;
+    const formatOk = validator.isEmail(email, { allow_utf8_local_part: false });
+    if (!formatOk) return false;
+    const domain = email.split("@")[1] ?? "";
+    const suggestion = getDomainSuggestion(domain);
+    return suggestion == null;
+  }, [form.email, PROVIDER_DOMAINS, TYPO_DOMAIN_MAP]);
 
+  const emailDomainSuggestion = useMemo(() => {
+    const email = form.email;
+    if (!email) return null;
+    if (!validator.isEmail(email, { allow_utf8_local_part: false })) return null;
+    const domain = email.split("@")[1] ?? "";
+    return getDomainSuggestion(domain);
+  }, [form.email, PROVIDER_DOMAINS, TYPO_DOMAIN_MAP]);
+
+  const applyEmailSuggestion = () => {
+    if (!emailDomainSuggestion) return;
+    const local = form.email.split("@")[0] ?? "";
+    if (!local) return;
+    set("email", `${local}@${emailDomainSuggestion}`);
+  };
+
+  // Keep input digits compatible with the selected country's max length.
   useEffect(() => {
-    if (!resendCooldownUntil || Date.now() >= resendCooldownUntil) return;
-    const id = window.setInterval(() => setNowTick(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, [resendCooldownUntil]);
+    setPhone((p) => sanitizeNationalPhoneInput(p, country.code));
+  }, [country.code]);
 
-  const resendCooldownLeftSec = useMemo(() => {
-    if (!resendCooldownUntil) return 0;
-    return Math.max(0, Math.ceil((resendCooldownUntil - nowTick) / 1000));
-  }, [resendCooldownUntil, nowTick]);
+  // Auto-update the budget currency when the phone country changes.
+  useEffect(() => {
+    setForm((prev) => {
+      if (!prev.budget) return prev;
+
+      const base = prev.budget
+        .replace(/\bINR\s?/g, "$")
+        .replace(/\bGBP\s?/g, "$")
+        .replace(/\bAED\s?/g, "$")
+        .replace(/\bSGD\s?/g, "$")
+        .replace(/\bAUD\s?/g, "$")
+        .replace(/\bEUR\s?/g, "$")
+        .replace(/\bSAR\s?/g, "$")
+        .replace(/\bQAR\s?/g, "$");
+
+      const idx = BUDGETS.indexOf(base);
+      if (idx >= 0 && budgetOptions[idx]) {
+        if (prev.budget === budgetOptions[idx]) return prev;
+        return { ...prev, budget: budgetOptions[idx] };
+      }
+
+      // Unknown label format — fall back to first budget tier to avoid empty required state.
+      return { ...prev, budget: budgetOptions[0] ?? prev.budget };
+    });
+  }, [budgetOptions]);
 
   const reset = useCallback(() => {
     setForm({
@@ -92,124 +222,32 @@ export function AddLeadModal() {
       notes: "",
     });
     setPhone("");
-    setPhoneVerified(false);
-    setOtpSent(false);
-    setOtp("");
-    setDevMockOtp(null);
-    setResendCooldownUntil(null);
-    setSending(false);
-    setVerifying(false);
     setCountry(COUNTRIES[0]);
   }, []);
 
-  const invalidateOtpFlow = useCallback(() => {
-    setOtpSent(false);
-    setOtp("");
-    setDevMockOtp(null);
-    setResendCooldownUntil(null);
-  }, []);
-
-  const handlePhoneChange = (v: string) => {
-    if (phoneVerified) return;
-    setPhone(v);
-    invalidateOtpFlow();
-  };
+  const handlePhoneChange = (v: string) => setPhone(sanitizeNationalPhoneInput(v, country.code));
 
   const handleCountrySelect = (c: (typeof COUNTRIES)[number]) => {
-    if (phoneVerified) return;
     setCountry(c);
     setOpenC(false);
-    invalidateOtpFlow();
   };
 
-  const runSendOrResend = useCallback(async () => {
-    if (phoneVerified) return;
-    if (!isValidNationalPhoneDigits(nationalDigits)) {
-      toast.error("Please enter a valid phone number");
-      return;
-    }
-    const dest = buildFullPhoneNumber(country.code, nationalDigits);
-    setSending(true);
-    try {
-      const result = await sendOtp(dest);
-      if (!result.ok) {
-        toast.error(result.message);
-        return;
-      }
-      setOtpSent(true);
-      setOtp("");
-      setDevMockOtp(result.devMockOtp ?? null);
-      setResendCooldownUntil(Date.now() + 30_000);
-      toast.success("OTP sent successfully");
-    } finally {
-      setSending(false);
-    }
-  }, [country.code, nationalDigits, phoneVerified]);
-
-  const handleResend = useCallback(async () => {
-    if (phoneVerified || !otpSent || resendCooldownLeftSec > 0 || sending) return;
-    setSending(true);
-    try {
-      const dest = buildFullPhoneNumber(country.code, nationalDigits);
-      const result = await resendOtp(dest);
-      if (!result.ok) {
-        toast.error(result.message);
-        return;
-      }
-      setOtp("");
-      setDevMockOtp(result.devMockOtp ?? null);
-      setResendCooldownUntil(Date.now() + 30_000);
-      toast.success("OTP sent successfully");
-    } finally {
-      setSending(false);
-    }
-  }, [country.code, nationalDigits, otpSent, phoneVerified, resendCooldownLeftSec, sending]);
-
-  const handleVerifyOtp = useCallback(async () => {
-    if (phoneVerified || !otpSent) return;
-    const cleaned = otp.replace(/\D/g, "");
-    if (cleaned.length !== 6) {
-      toast.error("Please enter the 6-digit OTP");
-      return;
-    }
-    setVerifying(true);
-    try {
-      const dest = buildFullPhoneNumber(country.code, nationalDigits);
-      const ok = await verifyOtp(dest, cleaned);
-      if (!ok) {
-        toast.error("Invalid OTP");
-        return;
-      }
-      setPhoneVerified(true);
-      setOtpSent(false);
-      setOtp("");
-      setDevMockOtp(null);
-      setResendCooldownUntil(null);
-      toast.success("Phone number verified successfully");
-    } finally {
-      setVerifying(false);
-    }
-  }, [country.code, nationalDigits, otp, otpSent, phoneVerified]);
-
-  const handleChangeNumber = useCallback(() => {
-    setPhoneVerified(false);
-    setOtpSent(false);
-    setOtp("");
-    setDevMockOtp(null);
-    setResendCooldownUntil(null);
-  }, []);
+  const handleChangeNumber = useCallback(() => setPhone(""), []);
 
   const submit = () => {
-    if (!phoneVerified) {
-      toast.error("Please verify phone number before saving lead");
+    if (!phoneValid) {
+      toast.error("Please enter a valid phone number for the selected country");
+      return;
+    }
+    if (!emailValidForRealTime) {
+      toast.error("Please enter a valid email address");
       return;
     }
     if (!form.name || !phone || !form.budget || !form.interestedCountry || !form.propertyType || !form.buyerType || !form.purpose || !form.timeline || !form.source) {
       toast.error("Please fill all required fields");
       return;
     }
-    const national = getNationalDigits(phone);
-    const fullPhone = buildFullPhoneNumber(country.code, national);
+    const fullPhone = formatPhoneE164(country.code, phone);
     const partial: Partial<Lead> = {
       budget: form.budget,
       buyerType: form.buyerType,
@@ -245,8 +283,6 @@ export function AddLeadModal() {
     setAddLeadOpen(false);
   };
 
-  const phoneLocked = phoneVerified;
-
   return (
     <Dialog
       open={addLeadOpen}
@@ -265,17 +301,70 @@ export function AddLeadModal() {
           <Field label="Full Name *">
             <Input value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. John Smith" />
           </Field>
-          <Field label="Email">
-            <Input type="email" value={form.email} onChange={(e) => set("email", e.target.value)} placeholder="name@email.com" />
-          </Field>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <Label className="text-xs uppercase tracking-wider text-muted-foreground">Email</Label>
+              {form.email.length > 0 ? (
+                <Badge
+                  variant="outline"
+                  className={
+                    emailValidForRealTime
+                      ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300/90 gap-1 text-[10px]"
+                      : "border-rose-400/30 bg-rose-400/10 text-rose-300/90 gap-1 text-[10px]"
+                  }
+                >
+                  {emailValidForRealTime ? "Valid Email" : "Invalid Email"}
+                </Badge>
+              ) : null}
+            </div>
+            <Input
+              type="email"
+              value={form.email}
+              onChange={(e) => {
+                // Normalize input: trim, lowercase, and collapse repeated spaces.
+                const normalized = e.target.value
+                  .replace(/\s+/g, " ")
+                  .trim()
+                  .toLowerCase();
+                set("email", normalized);
+              }}
+              placeholder="name@email.com"
+              className="bg-input/40"
+            />
+            <p className="text-xs text-white/40">Enter a valid business or personal email</p>
+
+            {emailDomainSuggestion ? (
+              <div className="pt-1">
+                <div className="text-[11px] text-white/45">Did you mean</div>
+                <button
+                  type="button"
+                  onClick={applyEmailSuggestion}
+                  className="mt-1 w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-left text-xs text-cyan-300/90 transition hover:bg-white/10"
+                >
+                  {emailDomainSuggestion}?
+                </button>
+              </div>
+            ) : null}
+          </div>
 
           <div className="md:col-span-2 space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <Label className="text-xs uppercase tracking-wider text-muted-foreground">Phone Number *</Label>
-              {phoneVerified && (
-                <Badge variant="outline" className="border-[oklch(0.82_0.2_150_/_0.55)] bg-[oklch(0.82_0.2_150_/_0.12)] text-[oklch(0.82_0.2_150)] gap-1 text-[10px]">
+              {phoneValid ? (
+                <Badge
+                  variant="outline"
+                  className="border-emerald-400/30 bg-emerald-400/10 text-emerald-300/90 gap-1 text-[10px]"
+                >
                   <ShieldCheck className="h-3 w-3" />
-                  Verified
+                  Valid number
+                </Badge>
+              ) : (
+                <Badge
+                  variant="outline"
+                  className="border-rose-400/30 bg-rose-400/10 text-rose-300/90 gap-1 text-[10px]"
+                >
+                  <span className="text-[12px] leading-none">!</span>
+                  Invalid number
                 </Badge>
               )}
             </div>
@@ -286,7 +375,6 @@ export function AddLeadModal() {
                     <Button
                       variant="outline"
                       role="combobox"
-                      disabled={phoneLocked}
                       className="w-[140px] shrink-0 justify-between bg-input/40"
                     >
                       <span>
@@ -318,74 +406,23 @@ export function AddLeadModal() {
                 <Input
                   value={phone}
                   onChange={(e) => handlePhoneChange(e.target.value)}
-                  placeholder="National number (7–15 digits)"
+                  placeholder={phonePlaceholder}
                   className="flex-1 min-w-0 bg-input/40"
                   inputMode="tel"
-                  disabled={phoneLocked}
+                  maxLength={phoneMaxLen}
                   autoComplete="tel-national"
                 />
               </div>
             </div>
 
             <div className="flex flex-wrap gap-2 items-center">
-              {!phoneVerified && (
-                <>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={sending || !phoneValid || otpSent}
-                    onClick={() => void runSendOrResend()}
-                  >
-                    {sending && !otpSent ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                    Send OTP
-                  </Button>
-                  {otpSent && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={sending || resendCooldownLeftSec > 0}
-                      onClick={() => void handleResend()}
-                    >
-                      {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                      Resend OTP
-                      {resendCooldownLeftSec > 0 ? (
-                        <span className="ml-1.5 tabular-nums text-muted-foreground">({resendCooldownLeftSec}s)</span>
-                      ) : null}
-                    </Button>
-                  )}
-                </>
-              )}
               <Button type="button" variant="ghost" size="sm" onClick={handleChangeNumber} className="text-muted-foreground">
                 Change Number
               </Button>
             </div>
-
-            {import.meta.env.DEV && devMockOtp && !phoneVerified && otpSent && (
-              <p className="text-xs text-amber-400/90 font-mono">Mock OTP: {devMockOtp}</p>
-            )}
-
-            {otpSent && !phoneVerified && (
-              <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center pt-1">
-                <Input
-                  maxLength={6}
-                  value={otp}
-                  onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                  placeholder="6-digit OTP"
-                  className="w-full sm:w-40 bg-input/40"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                />
-                <Button type="button" size="sm" disabled={verifying || otp.replace(/\D/g, "").length !== 6} onClick={() => void handleVerifyOtp()}>
-                  {verifying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                  Verify OTP
-                </Button>
-              </div>
-            )}
           </div>
 
-          <SelectField label="Budget Range *" value={form.budget} onChange={(v) => set("budget", v)} options={BUDGETS} />
+          <SelectField label="Budget Range *" value={form.budget} onChange={(v) => set("budget", v)} options={budgetOptions} />
           <Field label="Interested Country *">
             <Input
               value={form.interestedCountry}
@@ -418,7 +455,7 @@ export function AddLeadModal() {
           <Button variant="ghost" onClick={() => setAddLeadOpen(false)}>
             Cancel
           </Button>
-          <Button onClick={submit} className="neon-border" disabled={!phoneVerified}>
+          <Button onClick={submit} className="neon-border" disabled={!phoneValid}>
             Add Lead
           </Button>
         </div>

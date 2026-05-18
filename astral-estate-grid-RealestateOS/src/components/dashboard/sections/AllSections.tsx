@@ -1,18 +1,105 @@
 import { useEffect, useMemo, useState } from "react";
 import { useDashboard } from "@/lib/dashboard-store";
 import { GlowCard, SectionHeader, Mini, urgencyColor } from "../utils";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Card } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
-import { Send, Heart, Edit, Share2, Sparkles, Loader2, Calendar as CalIcon, Plus, FileText, Download, MapPin } from "lucide-react";
+import { Send, Heart, Edit, Share2, Sparkles, Loader2, Calendar as CalIcon, Plus, FileText, Download, MapPin, Copy, Mail, Linkedin, Globe } from "lucide-react";
 import { toast } from "sonner";
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
-import { SEED_BROKERS } from "@/lib/dashboard-data";
+import { BUDGETS, BUYER_TYPES, COUNTRIES, SEED_BROKERS, SOURCES, type Appointment } from "@/lib/dashboard-data";
 import { BillingTabPanel } from "@/components/dashboard/settings/BillingTabPanel";
+import { uploadPropertyImage, updatePropertyImages } from "@/lib/property-api";
+import { createAppointment as createAppointmentRecord, linkAppointmentToLead, fetchAppointments as fetchAppointmentsRecord, updateAppointment as updateAppointmentRecord } from "@/lib/appointment-api";
+import { RevenueCommandCenter } from "./RevenueCommandCenter";
+import { BrokerPerformanceCommandCenter } from "./BrokerPerformanceCommandCenter";
+import { AiIntelligenceCommandHub } from "./AiIntelligenceCommandHub";
+import { AiMarketForecastingEngine } from "./AiMarketForecastingEngine";
+
+const APPOINTMENT_TYPES = ["Site Visit", "Call", "Video Meeting", "Office Meeting", "Follow-up"] as const;
+const APPOINTMENT_STATUSES = ["Pending", "Confirmed", "Rescheduled", "Cancelled", "Completed"] as const;
+const APPOINTMENT_DURATIONS = ["15 min", "30 min", "45 min", "60 min", "90 min", "2 hours"] as const;
+const APPOINTMENT_URGENCIES = ["Critical", "High", "Medium", "Low"] as const;
+
+const APPOINTMENT_PHONE_RULES: Record<string, { min: number; max: number; placeholder: string }> = {
+  India: { min: 10, max: 10, placeholder: "9876543210" },
+  USA: { min: 10, max: 10, placeholder: "4155552671" },
+  Canada: { min: 10, max: 10, placeholder: "6045552671" },
+  UK: { min: 10, max: 11, placeholder: "7911123456" },
+  UAE: { min: 9, max: 9, placeholder: "501234567" },
+  Singapore: { min: 8, max: 8, placeholder: "81234567" },
+  Australia: { min: 9, max: 9, placeholder: "412345678" },
+  Germany: { min: 10, max: 11, placeholder: "15123456789" },
+  France: { min: 9, max: 9, placeholder: "612345678" },
+  "Saudi Arabia": { min: 9, max: 9, placeholder: "512345678" },
+  Qatar: { min: 8, max: 8, placeholder: "33123456" },
+  Oman: { min: 8, max: 8, placeholder: "91234567" },
+  Kuwait: { min: 8, max: 8, placeholder: "50012345" },
+  Bahrain: { min: 8, max: 8, placeholder: "33123456" },
+  "South Africa": { min: 9, max: 9, placeholder: "712345678" },
+  Other: { min: 8, max: 12, placeholder: "Enter number" },
+};
+
+type AppointmentFormState = {
+  leadName: string;
+  phone: string;
+  email: string;
+  country: string;
+  cityArea: string;
+  buyerType: string;
+  budget: string;
+  leadSource: string;
+  urgency: string;
+  appointmentType: (typeof APPOINTMENT_TYPES)[number];
+  date: string;
+  time: string;
+  duration: string;
+  propertyInterested: string;
+  assignedBroker: string;
+  meetingLocation: string;
+  notes: string;
+  status: (typeof APPOINTMENT_STATUSES)[number];
+};
+
+function sanitizeDigits(value: string) {
+  return value.replace(/[^\d]/g, "");
+}
+
+function getAppointmentCountryRule(country: string) {
+  return APPOINTMENT_PHONE_RULES[country] ?? APPOINTMENT_PHONE_RULES.Other;
+}
+
+function createAppointmentForm(): AppointmentFormState {
+  return {
+    leadName: "",
+    phone: "",
+    email: "",
+    country: COUNTRIES[0]?.name ?? "India",
+    cityArea: "",
+    buyerType: BUYER_TYPES[0] ?? "End User",
+    budget: BUDGETS[0] ?? "Below $100K",
+    leadSource: SOURCES[0] ?? "Website",
+    urgency: "Medium",
+    appointmentType: "Site Visit",
+    date: "",
+    time: "",
+    duration: "30 min",
+    propertyInterested: "",
+    assignedBroker: SEED_BROKERS[0]?.name ?? "",
+    meetingLocation: "",
+    notes: "",
+    status: "Pending",
+  };
+}
 
 // =============== AI Conversations ===============
 const SAMPLE_CONVS = [
@@ -89,107 +176,489 @@ export function AIConversationsSection() {
 }
 
 // =============== Properties ===============
-export function PropertiesSection() {
+export { PropertiesSection } from "./PropertiesSection";
+
+function PropertiesSectionLegacy() {
   const { properties, toggleFavorite, addProperty, updateProperty, leads, pushActivity } = useDashboard();
+
   const [q, setQ] = useState("");
-  const [open, setOpen] = useState<string | null>(null);
+  const [viewId, setViewId] = useState<string | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
   const [shareId, setShareId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [matchId, setMatchId] = useState<string | null>(null);
 
-  const [form, setForm] = useState({ title: "", country: "", city: "", price: "", type: "Apartment", image: "🏙️" });
-  const [editForm, setEditForm] = useState({ title: "", price: "", city: "" });
+  const [editForm, setEditForm] = useState(() => ({
+    title: "",
+    country: "",
+    city: "",
+    area: "",
+    address: "",
+    price: "",
+    currency: "USD",
+    propertyType: "Apartment",
+    bedrooms: 2,
+    bathrooms: 2,
+    size: "",
+    status: "Active" as "Verified" | "Active" | "Off Market",
+    description: "",
+    coverImageUrl: "",
+    galleryImageUrls: "",
+  }));
 
-  const filtered = properties.filter(p => !q || p.title.toLowerCase().includes(q.toLowerCase()) || p.city.toLowerCase().includes(q.toLowerCase()));
-  const sel = properties.find(p => p.id === open);
-  const editProp = properties.find(p => p.id === editId);
-  const shareProp = properties.find(p => p.id === shareId);
-  const matchProp = properties.find(p => p.id === matchId);
-  const matchingLeads = (target: typeof sel) => target ? leads.filter(l => l.propertyType === target.type).slice(0, 5) : [];
+  const [addForm, setAddForm] = useState(() => ({
+    title: "",
+    country: "",
+    city: "",
+    area: "",
+    address: "",
+    price: "",
+    currency: "USD",
+    propertyType: "Apartment",
+    bedrooms: 2,
+    bathrooms: 2,
+    size: "",
+    status: "Active" as "Verified" | "Active" | "Off Market",
+    description: "",
+    coverImageUrl: "",
+    galleryImageUrls: "",
+    galleryImageFiles: [] as File[],
+    coverImageFile: null as File | null,
+  }));
 
-  const submitAdd = () => {
-    if (!form.title.trim() || !form.city.trim() || !form.price.trim()) { toast.error("Title, city, price required"); return; }
-    addProperty({ id: Math.random().toString(36).slice(2), title: form.title, country: form.country || "—", city: form.city, price: form.price, type: form.type, roi: 80, yield: 5, appreciation: 10, image: form.image });
-    toast.success("Property added");
-    setAddOpen(false);
-    setForm({ title: "", country: "", city: "", price: "", type: "Apartment", image: "🏙️" });
+  const filtered = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    if (!term) return properties;
+    return properties.filter(
+      (p) =>
+        p.title.toLowerCase().includes(term) ||
+        p.city.toLowerCase().includes(term) ||
+        (p.country ?? "").toLowerCase().includes(term),
+    );
+  }, [properties, q]);
+
+  const viewProp = useMemo(() => properties.find((p) => p.id === viewId) ?? null, [properties, viewId]);
+  const editProp = useMemo(() => properties.find((p) => p.id === editId) ?? null, [properties, editId]);
+  const shareProp = useMemo(() => properties.find((p) => p.id === shareId) ?? null, [properties, shareId]);
+  const matchProp = useMemo(() => properties.find((p) => p.id === matchId) ?? null, [properties, matchId]);
+
+  const legacyPropertyType = (p: NonNullable<typeof viewProp>) => p.propertyType ?? p.type ?? "";
+
+  const matchingLeads = (target: typeof viewProp) => {
+    if (!target) return [];
+    const t = legacyPropertyType(target);
+    return leads.filter((l) => (l.propertyType ?? "") === t).slice(0, 5);
   };
-  const openEdit = (id: string) => { const p = properties.find(x => x.id === id)!; setEditForm({ title: p.title, price: p.price, city: p.city }); setEditId(id); };
-  const submitEdit = () => {
+
+  const matchingCount = (target: typeof viewProp) => {
+    if (!target) return 0;
+    const t = legacyPropertyType(target);
+    return leads.filter((l) => (l.propertyType ?? "") === t).length;
+  };
+
+  const getGallery = (p: NonNullable<typeof viewProp>) => {
+    const gallery = (p.galleryImages ?? []).filter(Boolean);
+    const cover = p.imageUrl ? [p.imageUrl] : [];
+    const merged = [...gallery, ...cover].filter(Boolean);
+    return merged.length ? merged : [];
+  };
+
+  const coverImageSrc = (p: NonNullable<typeof viewProp>) => {
+    return p.imageUrl ?? p.galleryImages?.[0] ?? "";
+  };
+
+  const premiumPlaceholder = (p: NonNullable<typeof viewProp>) => {
+    // Keep the existing futuristic neon vibe; show emoji if present, else a generic icon.
+    return (
+      <div className="absolute inset-0 bg-gradient-to-br from-primary/20 via-[oklch(0.7_0.25_300_/_0.2)] to-[oklch(0.85_0.18_200_/_0.2)] flex items-center justify-center text-6xl grid-bg">
+        {p.image ?? "🏙️"}
+      </div>
+    );
+  };
+
+  const getPriceLabel = (p: NonNullable<typeof viewProp>) => {
+    // `price` already includes currency in current seed; keep it.
+    return p.price;
+  };
+
+  const isVerified = (p: NonNullable<typeof viewProp>) => {
+    return Boolean(p.verified) || p.status === "Verified";
+  };
+
+  const roi = (p: NonNullable<typeof viewProp>) => p.roi ?? 0;
+  const rentalYield = (p: NonNullable<typeof viewProp>) => p.rentalYield ?? p.yield ?? 0;
+  const appreciationForecast = (p: NonNullable<typeof viewProp>) => p.appreciationForecast ?? p.appreciation ?? 0;
+
+  const openEdit = (id: string) => {
+    const p = properties.find((x) => x.id === id);
+    if (!p) return;
+    setEditForm({
+      title: p.title ?? "",
+      country: p.country ?? "",
+      city: p.city ?? "",
+      area: p.area ?? "",
+      address: p.address ?? "",
+      price: p.price ?? "",
+      currency: p.currency ?? "USD",
+      propertyType: legacyPropertyType(p as any) || "Apartment",
+      bedrooms: p.bedrooms ?? 2,
+      bathrooms: p.bathrooms ?? 2,
+      size: p.size ?? "",
+      status: (p.status ?? (p.verified ? "Verified" : "Active")) as any,
+      description: p.description ?? "",
+      coverImageUrl: p.imageUrl ?? "",
+      galleryImageUrls: (p.galleryImages ?? []).join(","),
+    });
+    setEditId(id);
+  };
+
+  const submitEdit = async () => {
     if (!editId) return;
-    updateProperty(editId, editForm);
+    const galleryUrls = editForm.galleryImageUrls
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    // Placeholder for R2/Supabase persistence.
+    await updatePropertyImages({
+      propertyId: editId,
+      coverImageUrl: editForm.coverImageUrl || undefined,
+      galleryImageUrls: galleryUrls.length ? galleryUrls : undefined,
+    });
+
+    updateProperty(editId, {
+      title: editForm.title,
+      country: editForm.country,
+      city: editForm.city,
+      area: editForm.area,
+      address: editForm.address,
+      price: editForm.price,
+      currency: editForm.currency,
+      propertyType: editForm.propertyType,
+      bedrooms: editForm.bedrooms,
+      bathrooms: editForm.bathrooms,
+      size: editForm.size,
+      status: editForm.status,
+      description: editForm.description,
+      imageUrl: editForm.coverImageUrl || undefined,
+      galleryImages: galleryUrls.length ? galleryUrls : undefined,
+
+      // Maintain legacy fields for older UI pieces.
+      type: editForm.propertyType,
+      roi: editProp?.roi ?? 80,
+      yield: editProp ? rentalYield(editProp as any) : 5,
+      appreciation: editProp ? appreciationForecast(editProp as any) : 10,
+      verified: editForm.status === "Verified",
+    } as any);
+
     pushActivity(`Property updated: ${editForm.title}`, "sparkles", "property");
     toast.success("Property updated");
     setEditId(null);
   };
-  const copyShare = (p: NonNullable<typeof sel>) => {
-    const url = `${typeof window !== "undefined" ? window.location.origin : ""}/p/${p.id}`;
+
+  const buildShareUrl = (p: NonNullable<typeof viewProp>) =>
+    `${typeof window !== "undefined" ? window.location.origin : ""}/p/${p.id}`;
+
+  const shareMessage = (p: NonNullable<typeof viewProp>, url: string) => {
+    const loc = [p.city, p.country].filter(Boolean).join(", ");
+    return `${p.title} — ${getPriceLabel(p)}\n${loc}\n${url}`;
+  };
+
+  const copyShare = (p: NonNullable<typeof viewProp>) => {
+    const url = buildShareUrl(p);
     navigator.clipboard?.writeText(url).catch(() => {});
     pushActivity(`Property shared: ${p.title}`, "sparkles", "property");
     toast.success("Share link copied", { description: url });
   };
 
+  const submitAdd = async () => {
+    const title = addForm.title.trim();
+    const city = addForm.city.trim();
+    const price = addForm.price.trim();
+    if (!title || !city || !price) {
+      toast.error("Title, city, price required");
+      return;
+    }
+
+    const galleryUrls = addForm.galleryImageUrls
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    // Upload files (placeholder: returns temporary object URLs for now).
+    const coverUrlFromFile = addForm.coverImageFile
+      ? await uploadPropertyImage(addForm.coverImageFile)
+      : "";
+    const galleryFromFiles = addForm.galleryImageFiles.length
+      ? await Promise.all(addForm.galleryImageFiles.map((f) => uploadPropertyImage(f)))
+      : [];
+
+    const finalCover = coverUrlFromFile || addForm.coverImageUrl;
+    const finalGallery = [...galleryUrls, ...galleryFromFiles].filter(Boolean);
+
+    addProperty({
+      id: Math.random().toString(36).slice(2),
+      title,
+      country: addForm.country || "—",
+      city,
+      area: addForm.area || "",
+      address: addForm.address || "",
+      price,
+      currency: addForm.currency || "USD",
+      propertyType: addForm.propertyType,
+      bedrooms: addForm.bedrooms,
+      bathrooms: addForm.bathrooms,
+      size: addForm.size,
+      status: addForm.status,
+      description: addForm.description,
+      imageUrl: finalCover || undefined,
+      galleryImages: finalGallery.length ? finalGallery : undefined,
+      verified: addForm.status === "Verified",
+
+      // Legacy fields used across the rest of the app.
+      type: addForm.propertyType,
+      roi: 80,
+      rentalYield: 5,
+      appreciationForecast: 10,
+      yield: 5,
+      appreciation: 10,
+      image: finalCover ? "🏙️" : "🏙️",
+    } as any);
+
+    toast.success("Property added");
+    setAddOpen(false);
+    setAddForm({
+      title: "",
+      country: "",
+      city: "",
+      area: "",
+      address: "",
+      price: "",
+      currency: "USD",
+      propertyType: "Apartment",
+      bedrooms: 2,
+      bathrooms: 2,
+      size: "",
+      status: "Active",
+      description: "",
+      coverImageUrl: "",
+      galleryImageUrls: "",
+      galleryImageFiles: [],
+      coverImageFile: null,
+    });
+  };
+
   return (
     <div>
       <SectionHeader title="Global Properties" subtitle="Multi-market inventory with predictive ROI">
-        <Input value={q} onChange={e => setQ(e.target.value)} placeholder="Search properties…" className="w-56 bg-input/40" />
-        <Button onClick={() => setAddOpen(true)} className="neon-border bg-primary/90"><Plus className="h-4 w-4" /> Add Property</Button>
+        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search properties…" className="w-56 bg-input/40" />
+        <Button onClick={() => setAddOpen(true)} className="neon-border bg-primary/90">
+          <Plus className="h-4 w-4" /> Add Property
+        </Button>
       </SectionHeader>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {filtered.map(p => (
+        {filtered.map((p) => (
           <GlowCard key={p.id}>
-            <div className="aspect-video rounded-xl bg-gradient-to-br from-primary/20 via-[oklch(0.7_0.25_300_/_0.2)] to-[oklch(0.85_0.18_200_/_0.2)] flex items-center justify-center text-6xl mb-3 grid-bg">{p.image}</div>
+            <div className="relative aspect-video rounded-xl overflow-hidden mb-3 grid-bg">
+              {p.imageUrl ? (
+                <img
+                  src={p.imageUrl}
+                  alt={p.title}
+                  className="h-full w-full object-cover"
+                  loading="lazy"
+                />
+              ) : (
+                premiumPlaceholder(p as any)
+              )}
+
+              <div className="absolute inset-0 pointer-events-none bg-gradient-to-t from-[#050a18] via-transparent to-transparent opacity-70" />
+
+              <div className="absolute left-3 top-3 flex flex-wrap gap-2">
+                <Badge className="bg-[oklch(0.82_0.2_150_/_0.2)] text-[oklch(0.82_0.2_150)] border-[oklch(0.82_0.2_150_/_0.5)]">
+                  Global Property
+                </Badge>
+                {roi(p as any) >= 85 ? (
+                  <Badge className="bg-emerald-400/10 text-emerald-300 border-emerald-400/30">
+                    High ROI
+                  </Badge>
+                ) : null}
+                {isVerified(p as any) ? (
+                  <Badge className="bg-sky-400/10 text-sky-300 border-sky-400/30">
+                    Verified
+                  </Badge>
+                ) : null}
+                {roi(p as any) >= 92 ? (
+                  <Badge className="bg-violet-500/10 text-violet-300 border-violet-500/30">
+                    Hot Deal
+                  </Badge>
+                ) : null}
+              </div>
+            </div>
+
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <div className="font-semibold truncate">{p.title}</div>
-                <div className="text-xs text-muted-foreground flex items-center gap-1"><MapPin className="h-3 w-3" /> {p.city}, {p.country}</div>
+                <div className="text-xs text-muted-foreground flex items-center gap-1">
+                  <MapPin className="h-3 w-3" /> {p.city}, {p.country}
+                </div>
               </div>
-              <button onClick={() => { toggleFavorite(p.id); toast(p.favorite ? "Removed from favorites" : "Added to favorites"); }} aria-label="Favorite"><Heart className={`h-4 w-4 ${p.favorite ? "fill-destructive text-destructive" : "text-muted-foreground"}`} /></button>
+              <button
+                onClick={() => {
+                  toggleFavorite(p.id);
+                  toast(p.favorite ? "Removed from favorites" : "Added to favorites");
+                }}
+                aria-label="Favorite"
+              >
+                <Heart className={`h-4 w-4 ${p.favorite ? "fill-destructive text-destructive" : "text-muted-foreground"}`} />
+              </button>
             </div>
+
             <div className="grid grid-cols-3 gap-2 mt-3 text-center">
               <Mini label="Price" value={p.price} />
-              <Mini label="ROI" value={`${p.roi}`} />
-              <Mini label="Yield" value={`${p.yield}%`} />
+              <Mini label="ROI" value={`${roi(p as any)}`} />
+              <Mini label="Yield" value={`${rentalYield(p as any)}%`} />
             </div>
+
             <div className="flex flex-wrap gap-2 mt-3">
-              <Button size="sm" variant="outline" className="flex-1" onClick={() => setOpen(p.id)}>View</Button>
-              <Button size="sm" variant="outline" onClick={() => openEdit(p.id)}><Edit className="h-3.5 w-3.5" /></Button>
-              <Button size="sm" variant="outline" onClick={() => setShareId(p.id)}><Share2 className="h-3.5 w-3.5" /></Button>
-              <Button size="sm" variant="outline" onClick={() => setMatchId(p.id)}>Match</Button>
+              <Button size="sm" variant="outline" className="flex-1" onClick={() => setViewId(p.id)}>
+                View
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => openEdit(p.id)} aria-label="Edit property">
+                <Edit className="h-3.5 w-3.5" />
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setShareId(p.id)} aria-label="Share property">
+                <Share2 className="h-3.5 w-3.5" />
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setMatchId(p.id)} aria-label="Match leads">
+                Match
+              </Button>
             </div>
           </GlowCard>
         ))}
       </div>
 
       {/* View Details */}
-      <Dialog open={!!sel} onOpenChange={o => !o && setOpen(null)}>
-        <DialogContent className="glass-strong max-w-2xl max-h-[90vh] overflow-y-auto scrollbar-thin">
-          {sel && (
+      <Dialog open={!!viewProp} onOpenChange={(o) => !o && setViewId(null)}>
+        <DialogContent className="glass-strong max-w-3xl max-h-[90vh] overflow-y-auto scrollbar-thin">
+          {viewProp && (
             <>
-              <DialogHeader><DialogTitle>{sel.title}</DialogTitle></DialogHeader>
-              <div className="aspect-video rounded-xl bg-gradient-to-br from-primary/20 to-[oklch(0.7_0.25_300_/_0.2)] flex items-center justify-center text-8xl grid-bg">{sel.image}</div>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <Mini label="Price" value={sel.price} />
-                <Mini label="ROI Score" value={`${sel.roi}`} />
-                <Mini label="Rental Yield" value={`${sel.yield}%`} />
-                <Mini label="Appreciation" value={`${sel.appreciation}%/yr`} />
+              <DialogHeader>
+                <DialogTitle>{viewProp.title}</DialogTitle>
+              </DialogHeader>
+
+              <div className="relative aspect-video rounded-xl overflow-hidden mb-4">
+                {viewProp.imageUrl ? (
+                  <img src={viewProp.imageUrl} alt={viewProp.title} className="h-full w-full object-cover" />
+                ) : (
+                  premiumPlaceholder(viewProp as any)
+                )}
               </div>
-              <div>
-                <div className="text-xs uppercase tracking-widest text-muted-foreground mb-2">Matching Leads</div>
-                {matchingLeads(sel).length === 0 ? <p className="text-sm text-muted-foreground">No matches yet.</p> : matchingLeads(sel).map(l => (
-                  <div key={l.id} className="flex items-center gap-3 py-2 border-b border-border/30">
-                    <Avatar className="h-7 w-7"><AvatarFallback className="text-xs">{l.name.split(" ").map(n=>n[0]).join("")}</AvatarFallback></Avatar>
-                    <div className="flex-1"><div className="text-sm">{l.name}</div><div className="text-xs text-muted-foreground">{l.budget}</div></div>
-                    <Badge variant="outline">AI {l.aiScore}</Badge>
+
+              {/* Gallery Thumbnails */}
+              {(() => {
+                const gallery = getGallery(viewProp as any);
+                if (!gallery.length) return null;
+                return (
+                  <div className="flex gap-2 overflow-x-auto pb-2 mb-4">
+                    {gallery.slice(0, 8).map((src, idx) => (
+                      <button
+                        key={src + idx}
+                        type="button"
+                        className="h-16 w-24 shrink-0 rounded-lg overflow-hidden border border-border/50 hover:border-cyan-400/40 transition"
+                        aria-label={`Gallery image ${idx + 1}`}
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={src} alt={`${viewProp.title} ${idx + 1}`} className="h-full w-full object-cover" loading="lazy" />
+                      </button>
+                    ))}
                   </div>
-                ))}
+                );
+              })()}
+
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+                <Mini label="Price" value={getPriceLabel(viewProp as any)} />
+                <Mini label="ROI Score" value={`${roi(viewProp as any)}`} />
+                <Mini label="Rental Yield" value={`${rentalYield(viewProp as any)}%`} />
+                <Mini label="Appreciation" value={`${appreciationForecast(viewProp as any)}%/yr`} />
               </div>
-              <div className="flex gap-2 justify-end pt-2">
-                <Button variant="outline" onClick={() => { setShareId(sel.id); setOpen(null); }}><Share2 className="h-4 w-4" /> Share</Button>
-                <Button variant="outline" onClick={() => { openEdit(sel.id); setOpen(null); }}><Edit className="h-4 w-4" /> Edit</Button>
-                <Button onClick={() => { setMatchId(sel.id); setOpen(null); }}>Match Leads</Button>
+
+              <Card className="glass-strong border-border/40 p-4 mb-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-xs uppercase tracking-widest text-muted-foreground">Location</div>
+                    <div className="font-semibold">
+                      {viewProp.city}, {viewProp.country}
+                    </div>
+                    <div className="text-sm text-muted-foreground">
+                      {viewProp.area || viewProp.address || "—"}
+                    </div>
+                  </div>
+                  <div className="flex gap-2 flex-wrap justify-end">
+                    {isVerified(viewProp as any) ? (
+                      <Badge className="bg-sky-400/10 text-sky-300 border-sky-400/30">Verified</Badge>
+                    ) : null}
+                    {roi(viewProp as any) >= 85 ? (
+                      <Badge className="bg-emerald-400/10 text-emerald-300 border-emerald-400/30">High ROI</Badge>
+                    ) : null}
+                    {roi(viewProp as any) >= 92 ? (
+                      <Badge className="bg-violet-500/10 text-violet-300 border-violet-500/30">Hot Deal</Badge>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <Mini label="Type" value={legacyPropertyType(viewProp as any) || "—"} />
+                  <Mini label="Bedrooms" value={`${viewProp.bedrooms ?? 0}`} />
+                  <Mini label="Bathrooms" value={`${viewProp.bathrooms ?? 0}`} />
+                  <Mini label="Size" value={viewProp.size || "—"} />
+                </div>
+
+                <div className="mt-4">
+                  <div className="text-xs uppercase tracking-widest text-muted-foreground mb-2">AI Property Insight</div>
+                  <div className="neon-text text-sm">
+                    {roi(viewProp as any) >= 90
+                      ? "Projected upside is strong. Prioritize verified leads and push for fast decision-making."
+                      : "Steady growth profile. Focus on conversion via targeted lead matches and itinerary follow-ups."}
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    {viewProp.description ? viewProp.description : "—"}
+                  </div>
+                </div>
+              </Card>
+
+              <div className="mb-4">
+                <div className="text-xs uppercase tracking-widest text-muted-foreground mb-2">
+                  Matching Leads <span className="text-muted-foreground/70">({matchingCount(viewProp as any)})</span>
+                </div>
+                {matchingLeads(viewProp as any).length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No matches yet.</p>
+                ) : (
+                  matchingLeads(viewProp as any).map((l) => (
+                    <div key={l.id} className="flex items-center gap-3 py-2 border-b border-border/30">
+                      <Avatar className="h-7 w-7">
+                        <AvatarFallback className="text-xs">
+                          {l.name.split(" ").map((n) => n[0]).join("")}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="flex-1">
+                        <div className="text-sm">{l.name}</div>
+                        <div className="text-xs text-muted-foreground">{l.budget}</div>
+                      </div>
+                      <Badge variant="outline">AI {l.aiScore}</Badge>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="flex gap-2 justify-end pt-2 flex-wrap">
+                <Button variant="outline" onClick={() => { setShareId(viewProp.id); setViewId(null); }}>
+                  <Share2 className="h-4 w-4" /> Share
+                </Button>
+                <Button variant="outline" onClick={() => { openEdit(viewProp.id); setViewId(null); }}>
+                  <Edit className="h-4 w-4" /> Edit
+                </Button>
+                <Button onClick={() => { setMatchId(viewProp.id); setViewId(null); }}>Match Leads</Button>
               </div>
             </>
           )}
@@ -197,30 +666,115 @@ export function PropertiesSection() {
       </Dialog>
 
       {/* Edit */}
-      <Dialog open={!!editProp} onOpenChange={o => !o && setEditId(null)}>
-        <DialogContent className="glass-strong max-w-md">
-          <DialogHeader><DialogTitle>Edit Property</DialogTitle></DialogHeader>
-          <div className="space-y-3">
-            <Input value={editForm.title} onChange={e => setEditForm({ ...editForm, title: e.target.value })} placeholder="Title" className="bg-input/40" />
-            <Input value={editForm.city} onChange={e => setEditForm({ ...editForm, city: e.target.value })} placeholder="City" className="bg-input/40" />
-            <Input value={editForm.price} onChange={e => setEditForm({ ...editForm, price: e.target.value })} placeholder="Price" className="bg-input/40" />
-            <div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setEditId(null)}>Cancel</Button><Button onClick={submitEdit}>Save</Button></div>
-          </div>
+      <Dialog open={!!editProp} onOpenChange={(o) => !o && setEditId(null)}>
+        <DialogContent className="glass-strong max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Edit Property</DialogTitle>
+          </DialogHeader>
+          {editProp && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <Input value={editForm.title} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} placeholder="Title" className="bg-input/40" />
+                <Input value={editForm.price} onChange={(e) => setEditForm({ ...editForm, price: e.target.value })} placeholder="Price (e.g. $2.4M)" className="bg-input/40" />
+                <Input value={editForm.country} onChange={(e) => setEditForm({ ...editForm, country: e.target.value })} placeholder="Country" className="bg-input/40" />
+                <Input value={editForm.city} onChange={(e) => setEditForm({ ...editForm, city: e.target.value })} placeholder="City" className="bg-input/40" />
+                <Input value={editForm.area} onChange={(e) => setEditForm({ ...editForm, area: e.target.value })} placeholder="Area" className="bg-input/40" />
+                <Input value={editForm.address} onChange={(e) => setEditForm({ ...editForm, address: e.target.value })} placeholder="Address" className="bg-input/40" />
+                <Input value={editForm.currency} onChange={(e) => setEditForm({ ...editForm, currency: e.target.value })} placeholder="Currency (USD)" className="bg-input/40" />
+                <Input value={editForm.propertyType} onChange={(e) => setEditForm({ ...editForm, propertyType: e.target.value })} placeholder="Property Type" className="bg-input/40" />
+                <Input type="number" value={editForm.bedrooms} onChange={(e) => setEditForm({ ...editForm, bedrooms: Number(e.target.value) })} placeholder="Bedrooms" className="bg-input/40" />
+                <Input type="number" value={editForm.bathrooms} onChange={(e) => setEditForm({ ...editForm, bathrooms: Number(e.target.value) })} placeholder="Bathrooms" className="bg-input/40" />
+                <Input value={editForm.size} onChange={(e) => setEditForm({ ...editForm, size: e.target.value })} placeholder="Size (e.g. 1200 sq ft)" className="bg-input/40" />
+                <Input value={editForm.status} onChange={(e) => setEditForm({ ...editForm, status: e.target.value as any })} placeholder="Status (Active/Verified/Off Market)" className="bg-input/40" />
+              </div>
+              <Textarea value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} placeholder="Description" className="bg-input/40" rows={4} />
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <Input value={editForm.coverImageUrl} onChange={(e) => setEditForm({ ...editForm, coverImageUrl: e.target.value })} placeholder="Cover image URL" className="bg-input/40" />
+                <Input value={editForm.galleryImageUrls} onChange={(e) => setEditForm({ ...editForm, galleryImageUrls: e.target.value })} placeholder="Gallery image URLs (comma-separated)" className="bg-input/40" />
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <Button variant="ghost" onClick={() => setEditId(null)}>Cancel</Button>
+                <Button onClick={() => void submitEdit()}>Save</Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 
       {/* Share */}
-      <Dialog open={!!shareProp} onOpenChange={o => !o && setShareId(null)}>
-        <DialogContent className="glass-strong max-w-md">
-          <DialogHeader><DialogTitle>Share Property</DialogTitle></DialogHeader>
+      <Dialog open={!!shareProp} onOpenChange={(o) => !o && setShareId(null)}>
+        <DialogContent className="glass-strong max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Share Property</DialogTitle>
+          </DialogHeader>
           {shareProp && (
-            <div className="space-y-3">
-              <div className="text-sm text-muted-foreground">Share <span className="text-foreground font-medium">{shareProp.title}</span> via:</div>
-              <div className="grid grid-cols-2 gap-2">
-                <Button variant="outline" onClick={() => copyShare(shareProp)}>Copy Link</Button>
-                <Button variant="outline" onClick={() => { window.open(`https://wa.me/?text=${encodeURIComponent(shareProp.title + " — " + shareProp.price)}`, "_blank"); pushActivity(`Property shared on WhatsApp: ${shareProp.title}`, "sparkles"); }}>WhatsApp</Button>
-                <Button variant="outline" onClick={() => { window.open(`mailto:?subject=${encodeURIComponent(shareProp.title)}&body=${encodeURIComponent(shareProp.price + " — " + shareProp.city)}`, "_blank"); pushActivity(`Property shared by email: ${shareProp.title}`, "sparkles"); }}>Email</Button>
-                <Button variant="outline" onClick={() => copyShare(shareProp)}>Telegram</Button>
+            <div className="space-y-4">
+              <div className="text-sm text-muted-foreground">
+                Share{" "}
+                <span className="text-foreground font-medium">{shareProp.title}</span> via:
+              </div>
+
+              {(() => {
+                const url = buildShareUrl(shareProp as any);
+                const msg = shareMessage(shareProp as any, url);
+                return (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <Button variant="outline" onClick={() => copyShare(shareProp as any)}>
+                      <Copy className="h-4 w-4 mr-2" /> Copy Link
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, "_blank");
+                        pushActivity(`Property shared on WhatsApp: ${shareProp.title}`, "sparkles");
+                      }}
+                    >
+                      <Globe className="h-4 w-4 mr-2" /> WhatsApp
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        const subject = `RealEstateOS: ${shareProp.title}`;
+                        window.open(
+                          `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(msg)}`,
+                          "_blank",
+                        );
+                        pushActivity(`Property shared by email: ${shareProp.title}`, "sparkles");
+                      }}
+                    >
+                      <Mail className="h-4 w-4 mr-2" /> Email
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        window.open(
+                          `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(url)}`,
+                          "_blank",
+                        );
+                        pushActivity(`Property shared on LinkedIn: ${shareProp.title}`, "sparkles");
+                      }}
+                    >
+                      <Linkedin className="h-4 w-4 mr-2" /> LinkedIn
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        toast("PDF export coming soon");
+                      }}
+                    >
+                      <Download className="h-4 w-4 mr-2" /> Download PDF
+                    </Button>
+                    <Button variant="outline" onClick={() => copyShare(shareProp as any)}>
+                      <Share2 className="h-4 w-4 mr-2" /> Copy Link (Alt)
+                    </Button>
+                  </div>
+                );
+              })()}
+
+              <div className="glass rounded-lg border border-border/40 p-3 text-xs text-muted-foreground">
+                Later: wire actual share analytics + PDF generation UI.
               </div>
             </div>
           )}
@@ -228,38 +782,132 @@ export function PropertiesSection() {
       </Dialog>
 
       {/* Match Leads */}
-      <Dialog open={!!matchProp} onOpenChange={o => !o && setMatchId(null)}>
+      <Dialog open={!!matchProp} onOpenChange={(o) => !o && setMatchId(null)}>
         <DialogContent className="glass-strong max-w-lg">
-          <DialogHeader><DialogTitle>Lead Matches — {matchProp?.title}</DialogTitle></DialogHeader>
-          {matchProp && (matchingLeads(matchProp).length === 0
-            ? <p className="text-sm text-muted-foreground">No matching leads found for this property type.</p>
-            : <div className="space-y-2">{matchingLeads(matchProp).map(l => (
-                <div key={l.id} className="flex items-center gap-3 p-2 glass rounded-lg">
-                  <Avatar className="h-8 w-8"><AvatarFallback className="text-xs bg-primary/20">{l.name.split(" ").map(n=>n[0]).join("")}</AvatarFallback></Avatar>
-                  <div className="flex-1 min-w-0"><div className="text-sm truncate">{l.name}</div><div className="text-xs text-muted-foreground">{l.budget} • {l.city}</div></div>
-                  <Badge variant="outline">AI {l.aiScore}</Badge>
-                  <Button size="sm" onClick={() => { pushActivity(`Lead ${l.name} matched to ${matchProp.title}`, "user-check"); toast.success("Match initiated"); }}>Push</Button>
+          <DialogHeader>
+            <DialogTitle>Lead Matches — {matchProp?.title}</DialogTitle>
+          </DialogHeader>
+          {matchProp && (
+            <>
+              {matchingLeads(matchProp).length === 0 ? (
+                <p className="text-sm text-muted-foreground">No matching leads found for this property type.</p>
+              ) : (
+                <div className="space-y-2">
+                  {matchingLeads(matchProp).map((l) => (
+                    <div key={l.id} className="flex items-center gap-3 p-2 glass rounded-lg">
+                      <Avatar className="h-8 w-8">
+                        <AvatarFallback className="text-xs bg-primary/20">
+                          {l.name.split(" ").map((n) => n[0]).join("")}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm truncate">{l.name}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {l.budget} • {l.city}
+                        </div>
+                      </div>
+                      <Badge variant="outline">AI {l.aiScore}</Badge>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          pushActivity(`Lead ${l.name} matched to ${matchProp.title}`, "user-check");
+                          toast.success("Match initiated");
+                        }}
+                      >
+                        Push
+                      </Button>
+                    </div>
+                  ))}
                 </div>
-              ))}</div>
+              )}
+            </>
           )}
         </DialogContent>
       </Dialog>
 
       {/* Add */}
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
-        <DialogContent className="glass-strong max-w-md">
-          <DialogHeader><DialogTitle>Add Property</DialogTitle></DialogHeader>
-          <div className="space-y-3">
-            <Input value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="Title" className="bg-input/40" />
-            <div className="grid grid-cols-2 gap-2">
-              <Input value={form.country} onChange={e => setForm({ ...form, country: e.target.value })} placeholder="Country" className="bg-input/40" />
-              <Input value={form.city} onChange={e => setForm({ ...form, city: e.target.value })} placeholder="City" className="bg-input/40" />
+        <DialogContent className="glass-strong max-w-2xl max-h-[90vh] overflow-y-auto scrollbar-thin">
+          <DialogHeader>
+            <DialogTitle>Add Property</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <Input value={addForm.title} onChange={(e) => setAddForm({ ...addForm, title: e.target.value })} placeholder="Title" className="bg-input/40" />
+              <Input value={addForm.price} onChange={(e) => setAddForm({ ...addForm, price: e.target.value })} placeholder="Price (e.g. $2.4M)" className="bg-input/40" />
+              <Input value={addForm.country} onChange={(e) => setAddForm({ ...addForm, country: e.target.value })} placeholder="Country" className="bg-input/40" />
+              <Input value={addForm.city} onChange={(e) => setAddForm({ ...addForm, city: e.target.value })} placeholder="City" className="bg-input/40" />
+              <Input value={addForm.area} onChange={(e) => setAddForm({ ...addForm, area: e.target.value })} placeholder="Area" className="bg-input/40" />
+              <Input value={addForm.address} onChange={(e) => setAddForm({ ...addForm, address: e.target.value })} placeholder="Address" className="bg-input/40" />
+              <Input value={addForm.currency} onChange={(e) => setAddForm({ ...addForm, currency: e.target.value })} placeholder="Currency (USD)" className="bg-input/40" />
+              <Input value={addForm.propertyType} onChange={(e) => setAddForm({ ...addForm, propertyType: e.target.value })} placeholder="Property Type" className="bg-input/40" />
+              <Input type="number" value={addForm.bedrooms} onChange={(e) => setAddForm({ ...addForm, bedrooms: Number(e.target.value) })} className="bg-input/40" />
+              <Input type="number" value={addForm.bathrooms} onChange={(e) => setAddForm({ ...addForm, bathrooms: Number(e.target.value) })} className="bg-input/40" />
+              <Input value={addForm.size} onChange={(e) => setAddForm({ ...addForm, size: e.target.value })} placeholder="Size (e.g. 1200 sq ft)" className="bg-input/40" />
+              <Input value={addForm.status} onChange={(e) => setAddForm({ ...addForm, status: e.target.value as any })} placeholder="Status (Active/Verified/Off Market)" className="bg-input/40" />
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              <Input value={form.price} onChange={e => setForm({ ...form, price: e.target.value })} placeholder="Price (e.g. $2.4M)" className="bg-input/40" />
-              <Input value={form.image} onChange={e => setForm({ ...form, image: e.target.value })} placeholder="Emoji" className="bg-input/40" />
+
+            <Textarea
+              value={addForm.description}
+              onChange={(e) => setAddForm({ ...addForm, description: e.target.value })}
+              placeholder="Description"
+              className="bg-input/40"
+              rows={4}
+            />
+
+            {/* Image upload fields */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <Card className="glass-strong border-border/40 p-4">
+                <div className="text-xs uppercase tracking-widest text-muted-foreground mb-2">Cover Image</div>
+                <Input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0] ?? null;
+                    setAddForm({ ...addForm, coverImageFile: file });
+                  }}
+                  className="bg-input/40"
+                />
+                <div className="mt-2">
+                  <Input
+                    value={addForm.coverImageUrl}
+                    onChange={(e) => setAddForm({ ...addForm, coverImageUrl: e.target.value })}
+                    placeholder="Cover image URL (optional)"
+                    className="bg-input/40"
+                  />
+                </div>
+              </Card>
+
+              <Card className="glass-strong border-border/40 p-4">
+                <div className="text-xs uppercase tracking-widest text-muted-foreground mb-2">Gallery Images</div>
+                <Input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files ?? []);
+                    setAddForm({ ...addForm, galleryImageFiles: files });
+                  }}
+                  className="bg-input/40"
+                />
+                <div className="mt-2">
+                  <Input
+                    value={addForm.galleryImageUrls}
+                    onChange={(e) => setAddForm({ ...addForm, galleryImageUrls: e.target.value })}
+                    placeholder="Gallery URLs (comma-separated, optional)"
+                    className="bg-input/40"
+                  />
+                </div>
+              </Card>
             </div>
-            <div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setAddOpen(false)}>Cancel</Button><Button onClick={submitAdd}>Add</Button></div>
+
+            <div className="flex justify-end gap-2 flex-wrap">
+              <Button variant="ghost" onClick={() => setAddOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={() => void submitAdd()}>Add</Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
@@ -269,64 +917,431 @@ export function PropertiesSection() {
 
 // =============== Appointments ===============
 export function AppointmentsSection() {
-  const { appointments, addAppointment, updateAppointment, pushActivity } = useDashboard();
+  const { appointments, properties, addAppointment, updateAppointment, pushActivity } = useDashboard();
+  const [addOpen, setAddOpen] = useState(false);
   const [reschedId, setReschedId] = useState<string | null>(null);
   const [rDate, setRDate] = useState("");
   const [rTime, setRTime] = useState("");
   const [rNotes, setRNotes] = useState("");
+  const [form, setForm] = useState<AppointmentFormState>(() => createAppointmentForm());
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    void fetchAppointmentsRecord();
+  }, []);
 
   const statusBadge = (s: string) =>
-    s === "Confirmed" ? "border-[oklch(0.82_0.2_150_/_0.5)] text-[oklch(0.82_0.2_150)]"
-    : s === "Pending" ? "border-[oklch(0.78_0.2_50_/_0.5)] text-[oklch(0.88_0.18_60)]"
-    : s === "Rescheduled" ? "border-[oklch(0.7_0.25_300_/_0.5)] text-[oklch(0.78_0.22_300)]"
-    : "border-destructive/40 text-destructive";
+    s === "Confirmed"
+      ? "border-[oklch(0.82_0.2_150_/_0.5)] text-[oklch(0.82_0.2_150)]"
+      : s === "Pending"
+        ? "border-[oklch(0.78_0.2_50_/_0.5)] text-[oklch(0.88_0.18_60)]"
+        : s === "Completed"
+          ? "border-[oklch(0.82_0.2_150_/_0.5)] text-[oklch(0.82_0.2_150)]"
+          : s === "Rescheduled"
+            ? "border-[oklch(0.7_0.25_300_/_0.5)] text-[oklch(0.78_0.22_300)]"
+            : "border-destructive/40 text-destructive";
+
+  const country = COUNTRIES.find((item) => item.name === form.country) ?? COUNTRIES[0];
+  const phoneRule = getAppointmentCountryRule(form.country);
+  const phoneDigits = sanitizeDigits(form.phone);
+  const phoneValid = phoneDigits.length >= phoneRule.min && phoneDigits.length <= phoneRule.max;
+  const emailValid = !form.email.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim());
+  const propertyLabel = properties.find((p) => p.id === form.propertyInterested)?.title || form.propertyInterested || "TBD";
+
+  const resetForm = () => {
+    setForm(createAppointmentForm());
+    setErrors({});
+  };
 
   const open = (id: string) => {
-    const a = appointments.find(x => x.id === id);
-    setReschedId(id); setRDate(a?.date ?? ""); setRTime(a?.time ?? ""); setRNotes(a?.notes ?? "");
+    const a = appointments.find((x) => x.id === id);
+    setReschedId(id);
+    setRDate(a?.date ?? "");
+    setRTime(a?.time ?? "");
+    setRNotes(a?.notes ?? "");
   };
+
   const submitReschedule = () => {
     if (!reschedId) return;
-    if (!rDate.trim() || !rTime.trim()) { toast.error("Date and time required"); return; }
-    updateAppointment(reschedId, { date: rDate, time: rTime, notes: rNotes, status: "Rescheduled" });
+    if (!rDate.trim() || !rTime.trim()) {
+      toast.error("Date and time required");
+      return;
+    }
+    updateAppointment(reschedId, { date: rDate, time: rTime, notes: rNotes, status: "Rescheduled", updatedAt: Date.now() });
+    void updateAppointmentRecord(reschedId, { date: rDate, time: rTime, notes: rNotes, status: "Rescheduled", updatedAt: Date.now() });
     pushActivity(`Appointment rescheduled to ${rDate} ${rTime}`, "calendar", "visit");
     toast.success("Appointment rescheduled");
     setReschedId(null);
   };
 
+  const submitAdd = async () => {
+    const nextErrors: Record<string, string> = {};
+    if (!form.leadName.trim()) nextErrors.leadName = "Lead name is required.";
+    if (!phoneDigits) nextErrors.phone = "Phone number is required.";
+    if (!phoneValid) nextErrors.phone = `Phone number must have ${phoneRule.min}${phoneRule.min !== phoneRule.max ? `-${phoneRule.max}` : ""} digits.`;
+    if (!form.date.trim()) nextErrors.date = "Date is required.";
+    if (!form.time.trim()) nextErrors.time = "Time is required.";
+    if (!form.appointmentType) nextErrors.appointmentType = "Appointment type is required.";
+    if (!emailValid) nextErrors.email = "Please enter a valid email address.";
+
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) {
+      toast.error("Please fix the highlighted fields");
+      return;
+    }
+
+    const selectedProperty = properties.find((p) => p.id === form.propertyInterested) ?? null;
+    const appointment: Appointment = {
+      id: `appt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      leadName: form.leadName.trim(),
+      phone: `${country.code}${phoneDigits}`,
+      email: form.email.trim().toLowerCase(),
+      country: form.country,
+      city: form.cityArea.trim(),
+      buyerType: form.buyerType,
+      budget: form.budget,
+      leadSource: form.leadSource,
+      urgency: form.urgency as Appointment["urgency"],
+      appointmentType: form.appointmentType,
+      property: selectedProperty?.title || form.propertyInterested || "TBD",
+      propertyId: selectedProperty?.id,
+      date: form.date.trim(),
+      time: form.time.trim(),
+      duration: form.duration,
+      meetingLocation: form.meetingLocation.trim() || selectedProperty?.address || "",
+      notes: form.notes.trim(),
+      status: form.status,
+      assignedBroker: form.assignedBroker,
+      broker: form.assignedBroker,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    const created = await createAppointmentRecord(appointment);
+    addAppointment(created);
+    toast.success("Appointment booked successfully");
+    setAddOpen(false);
+    resetForm();
+  };
+
   return (
     <div>
       <SectionHeader title="Appointments" subtitle="Site visits and broker scheduling">
-        <Button onClick={() => { addAppointment({ id: Math.random().toString(36).slice(2), leadName: "New Lead", property: "TBD", date: "May 20, 2026", time: "3:00 PM", status: "Pending" }); toast.success("Appointment created"); }} className="neon-border bg-primary/90"><Plus className="h-4 w-4" /> New</Button>
+        <Button onClick={() => setAddOpen(true)} className="neon-border bg-primary/90">
+          <Plus className="h-4 w-4" /> New Appointment
+        </Button>
       </SectionHeader>
+
       <div className="grid gap-3">
-        {appointments.map(a => (
+        {appointments.map((a) => (
           <GlowCard key={a.id}>
             <div className="flex flex-wrap items-center gap-4">
-              <div className="h-12 w-12 rounded-xl bg-primary/15 border border-primary/30 flex items-center justify-center"><CalIcon className="h-5 w-5 text-primary" /></div>
-              <div className="flex-1 min-w-0">
-                <div className="font-semibold">{a.leadName} <span className="text-muted-foreground">→</span> {a.property}</div>
-                <div className="text-sm text-muted-foreground">{a.date} • {a.time}{a.broker ? ` • ${a.broker}` : ""}{a.notes ? ` • ${a.notes}` : ""}</div>
+              <div className="h-12 w-12 rounded-xl bg-primary/15 border border-primary/30 flex items-center justify-center">
+                <CalIcon className="h-5 w-5 text-primary" />
               </div>
-              <Badge variant="outline" className={statusBadge(a.status)}>{a.status}</Badge>
+              <div className="flex-1 min-w-0">
+                <div className="font-semibold">
+                  {a.leadName} <span className="text-muted-foreground">→</span> {a.property}
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  {a.date} • {a.time}
+                  {a.appointmentType ? ` • ${a.appointmentType}` : ""}
+                  {a.buyerType ? ` • ${a.buyerType}` : ""}
+                  {a.broker ? ` • ${a.broker}` : ""}
+                </div>
+              </div>
+              <Badge variant="outline" className={statusBadge(a.status)}>
+                {a.status}
+              </Badge>
               <div className="flex gap-2 flex-wrap">
-                <Button size="sm" variant="outline" disabled={a.status === "Confirmed"} onClick={() => { updateAppointment(a.id, { status: "Confirmed" }); pushActivity(`Visit confirmed: ${a.leadName}`, "calendar", "visit"); toast.success("Visit confirmed"); }}>Confirm</Button>
-                <Button size="sm" variant="outline" onClick={() => open(a.id)}>Reschedule</Button>
-                <Button size="sm" variant="ghost" className="text-destructive" disabled={a.status === "Cancelled"} onClick={() => { updateAppointment(a.id, { status: "Cancelled" }); pushActivity(`Appointment cancelled: ${a.leadName}`, "calendar", "visit"); toast.error("Appointment cancelled"); }}>Cancel</Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={a.status === "Confirmed"}
+                  onClick={() => {
+                    updateAppointment(a.id, { status: "Confirmed", updatedAt: Date.now() });
+                    void updateAppointmentRecord(a.id, { status: "Confirmed", updatedAt: Date.now() });
+                    pushActivity(`Visit confirmed: ${a.leadName}`, "calendar", "visit");
+                    toast.success("Visit confirmed");
+                  }}
+                >
+                  Confirm
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={a.status === "Completed"}
+                  onClick={() => {
+                    updateAppointment(a.id, { status: "Completed", updatedAt: Date.now() });
+                    void updateAppointmentRecord(a.id, { status: "Completed", updatedAt: Date.now() });
+                    pushActivity(`Appointment completed: ${a.leadName}`, "calendar", "visit");
+                    toast.success("Appointment completed");
+                  }}
+                >
+                  Complete
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => open(a.id)}>
+                  Reschedule
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-destructive"
+                  disabled={a.status === "Cancelled"}
+                  onClick={() => {
+                    updateAppointment(a.id, { status: "Cancelled", updatedAt: Date.now() });
+                    void updateAppointmentRecord(a.id, { status: "Cancelled", updatedAt: Date.now() });
+                    pushActivity(`Appointment cancelled: ${a.leadName}`, "calendar", "visit");
+                    toast.error("Appointment cancelled");
+                  }}
+                >
+                  Cancel
+                </Button>
               </div>
             </div>
           </GlowCard>
         ))}
       </div>
 
-      <Dialog open={!!reschedId} onOpenChange={o => !o && setReschedId(null)}>
+      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+        <DialogContent className="max-h-[96vh] w-[calc(100vw-1rem)] overflow-y-auto border-white/10 bg-slate-950 text-white sm:max-w-5xl">
+          <DialogHeader className="space-y-2 pr-10">
+            <DialogTitle>New Appointment</DialogTitle>
+            <DialogDescription className="text-slate-400">
+              Capture full client and meeting details before booking the visit or follow-up.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-6">
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="rounded-3xl border border-white/10 bg-white/5 p-4 space-y-4">
+                <div className="text-xs uppercase tracking-[0.3em] text-cyan-200/70">Lead / Client Details</div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2 sm:col-span-2">
+                    <Label className="text-xs text-slate-200">Lead Name *</Label>
+                    <Input value={form.leadName} onChange={(e) => setForm((prev) => ({ ...prev, leadName: e.target.value }))} placeholder="Aman Sharma" className="bg-black/40 border-white/10 text-white" />
+                    {errors.leadName ? <p className="text-xs text-red-400">{errors.leadName}</p> : null}
+                  </div>
+
+                  <div className="space-y-2 sm:col-span-2">
+                    <Label className="text-xs text-slate-200">Phone Number *</Label>
+                    <div className="flex gap-2">
+                      <div className="flex items-center rounded-xl border border-white/10 bg-black/40 px-3 text-sm text-cyan-100">{country.code}</div>
+                      <Input
+                        value={form.phone}
+                        onChange={(e) =>
+                          setForm((prev) => ({
+                            ...prev,
+                            phone: sanitizeDigits(e.target.value).slice(0, phoneRule.max),
+                          }))
+                        }
+                        placeholder={phoneRule.placeholder}
+                        className="bg-black/40 border-white/10 text-white"
+                        maxLength={phoneRule.max}
+                      />
+                    </div>
+                    <div className="text-[11px] text-slate-500">Country code updates automatically from the selected country.</div>
+                    {errors.phone ? <p className="text-xs text-red-400">{errors.phone}</p> : null}
+                  </div>
+
+                  <div className="space-y-2 sm:col-span-2">
+                    <Label className="text-xs text-slate-200">Email</Label>
+                    <Input
+                      value={form.email}
+                      onChange={(e) => setForm((prev) => ({ ...prev, email: e.target.value.trimStart().toLowerCase().replace(/\s+/g, " ") }))}
+                      placeholder="buyer@example.com"
+                      className="bg-black/40 border-white/10 text-white"
+                    />
+                    {!emailValid ? <p className="text-xs text-red-400">Please enter a valid email address.</p> : null}
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-xs text-slate-200">Country</Label>
+                    <Select value={form.country} onValueChange={(value) => setForm((prev) => ({ ...prev, country: value, phone: "" }))}>
+                      <SelectTrigger className="bg-black/40 border-white/10 text-white">
+                        <SelectValue placeholder="Select country" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {COUNTRIES.map((item) => (
+                          <SelectItem key={item.name} value={item.name}>
+                            {item.flag} {item.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-xs text-slate-200">City / Area</Label>
+                    <Input value={form.cityArea} onChange={(e) => setForm((prev) => ({ ...prev, cityArea: e.target.value }))} placeholder="Dubai Marina / Sector 150" className="bg-black/40 border-white/10 text-white" />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-xs text-slate-200">Buyer Type</Label>
+                    <Select value={form.buyerType} onValueChange={(value) => setForm((prev) => ({ ...prev, buyerType: value }))}>
+                      <SelectTrigger className="bg-black/40 border-white/10 text-white"><SelectValue placeholder="Buyer type" /></SelectTrigger>
+                      <SelectContent>
+                        {BUYER_TYPES.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-xs text-slate-200">Budget Range</Label>
+                    <Select value={form.budget} onValueChange={(value) => setForm((prev) => ({ ...prev, budget: value }))}>
+                      <SelectTrigger className="bg-black/40 border-white/10 text-white"><SelectValue placeholder="Budget" /></SelectTrigger>
+                      <SelectContent>
+                        {BUDGETS.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-xs text-slate-200">Lead Source</Label>
+                    <Select value={form.leadSource} onValueChange={(value) => setForm((prev) => ({ ...prev, leadSource: value }))}>
+                      <SelectTrigger className="bg-black/40 border-white/10 text-white"><SelectValue placeholder="Lead source" /></SelectTrigger>
+                      <SelectContent>
+                        {SOURCES.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-xs text-slate-200">Urgency Level</Label>
+                    <Select value={form.urgency} onValueChange={(value) => setForm((prev) => ({ ...prev, urgency: value }))}>
+                      <SelectTrigger className="bg-black/40 border-white/10 text-white"><SelectValue placeholder="Urgency" /></SelectTrigger>
+                      <SelectContent>
+                        {APPOINTMENT_URGENCIES.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-3xl border border-white/10 bg-white/5 p-4 space-y-4">
+                <div className="text-xs uppercase tracking-[0.3em] text-cyan-200/70">Appointment Details</div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2 sm:col-span-2">
+                    <Label className="text-xs text-slate-200">Appointment Type *</Label>
+                    <Select value={form.appointmentType} onValueChange={(value) => setForm((prev) => ({ ...prev, appointmentType: value as AppointmentFormState["appointmentType"] }))}>
+                      <SelectTrigger className="bg-black/40 border-white/10 text-white"><SelectValue placeholder="Appointment type" /></SelectTrigger>
+                      <SelectContent>
+                        {APPOINTMENT_TYPES.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                    {errors.appointmentType ? <p className="text-xs text-red-400">{errors.appointmentType}</p> : null}
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-xs text-slate-200">Date *</Label>
+                    <Input type="date" value={form.date} onChange={(e) => setForm((prev) => ({ ...prev, date: e.target.value }))} className="bg-black/40 border-white/10 text-white" />
+                    {errors.date ? <p className="text-xs text-red-400">{errors.date}</p> : null}
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-xs text-slate-200">Time *</Label>
+                    <Input type="time" value={form.time} onChange={(e) => setForm((prev) => ({ ...prev, time: e.target.value }))} className="bg-black/40 border-white/10 text-white" />
+                    {errors.time ? <p className="text-xs text-red-400">{errors.time}</p> : null}
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-xs text-slate-200">Duration</Label>
+                    <Select value={form.duration} onValueChange={(value) => setForm((prev) => ({ ...prev, duration: value }))}>
+                      <SelectTrigger className="bg-black/40 border-white/10 text-white"><SelectValue placeholder="Duration" /></SelectTrigger>
+                      <SelectContent>
+                        {APPOINTMENT_DURATIONS.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-xs text-slate-200">Status</Label>
+                    <Select value={form.status} onValueChange={(value) => setForm((prev) => ({ ...prev, status: value as AppointmentFormState["status"] }))}>
+                      <SelectTrigger className="bg-black/40 border-white/10 text-white"><SelectValue placeholder="Status" /></SelectTrigger>
+                      <SelectContent>
+                        {APPOINTMENT_STATUSES.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2 sm:col-span-2">
+                    <Label className="text-xs text-slate-200">Property Interested</Label>
+                    <Select value={form.propertyInterested} onValueChange={(value) => setForm((prev) => ({ ...prev, propertyInterested: value }))}>
+                      <SelectTrigger className="bg-black/40 border-white/10 text-white"><SelectValue placeholder="Select property" /></SelectTrigger>
+                      <SelectContent>
+                        {properties.length ? (
+                          properties.map((p) => (
+                            <SelectItem key={p.id} value={p.id}>
+                              {p.title} • {p.city}, {p.country}
+                            </SelectItem>
+                          ))
+                        ) : (
+                          <SelectItem value="TBD">No properties available</SelectItem>
+                        )}
+                      </SelectContent>
+                    </Select>
+                    <div className="text-[11px] text-slate-500">Current selection: {propertyLabel}</div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-xs text-slate-200">Assigned Broker</Label>
+                    <Select value={form.assignedBroker} onValueChange={(value) => setForm((prev) => ({ ...prev, assignedBroker: value }))}>
+                      <SelectTrigger className="bg-black/40 border-white/10 text-white"><SelectValue placeholder="Assign broker" /></SelectTrigger>
+                      <SelectContent>
+                        {SEED_BROKERS.map((item) => <SelectItem key={item.id} value={item.name}>{item.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-xs text-slate-200">Meeting Location</Label>
+                    <Input value={form.meetingLocation} onChange={(e) => setForm((prev) => ({ ...prev, meetingLocation: e.target.value }))} placeholder="On-site / Office / Google Meet" className="bg-black/40 border-white/10 text-white" />
+                  </div>
+
+                  <div className="space-y-2 sm:col-span-2">
+                    <Label className="text-xs text-slate-200">Notes</Label>
+                    <Textarea value={form.notes} onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value }))} placeholder="Context, preferences, or follow-up notes" className="min-h-24 bg-black/40 border-white/10 text-white" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <Button variant="ghost" onClick={() => { setAddOpen(false); resetForm(); }}>
+                Close
+              </Button>
+              <Button onClick={() => void submitAdd()} className="neon-border bg-primary/90">
+                Book Appointment
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!reschedId} onOpenChange={(o) => !o && setReschedId(null)}>
         <DialogContent className="glass-strong max-w-md">
-          <DialogHeader><DialogTitle>Reschedule Appointment</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Reschedule Appointment</DialogTitle>
+          </DialogHeader>
           <div className="space-y-3">
-            <div><div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">New date</div><Input value={rDate} onChange={e => setRDate(e.target.value)} placeholder="May 22, 2026" className="bg-input/40" /></div>
-            <div><div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">New time</div><Input value={rTime} onChange={e => setRTime(e.target.value)} placeholder="3:00 PM" className="bg-input/40" /></div>
-            <div><div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">Notes</div><Input value={rNotes} onChange={e => setRNotes(e.target.value)} placeholder="Reason / context" className="bg-input/40" /></div>
-            <div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setReschedId(null)}>Cancel</Button><Button onClick={submitReschedule}>Save</Button></div>
+            <div>
+              <div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">New date</div>
+              <Input value={rDate} onChange={(e) => setRDate(e.target.value)} placeholder="May 22, 2026" className="bg-input/40" />
+            </div>
+            <div>
+              <div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">New time</div>
+              <Input value={rTime} onChange={(e) => setRTime(e.target.value)} placeholder="3:00 PM" className="bg-input/40" />
+            </div>
+            <div>
+              <div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">Notes</div>
+              <Input value={rNotes} onChange={(e) => setRNotes(e.target.value)} placeholder="Reason / context" className="bg-input/40" />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setReschedId(null)}>
+                Cancel
+              </Button>
+              <Button onClick={submitReschedule}>Save</Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
@@ -380,209 +1395,806 @@ export { TrustSection } from "./TrustEngineSection";
 
 // =============== Revenue Analytics ===============
 export function RevenueSection() {
-  const [period, setPeriod] = useState("90d");
-  const data = Array.from({ length: 12 }, (_, i) => ({ m: ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][i], rev: 600 + Math.sin(i * 0.6) * 200 + i * 80, deals: 12 + Math.cos(i * 0.5) * 5 + i * 1.2 }));
-  const funnel = [{ s: "Leads", v: 1200 }, { s: "Qualified", v: 720 }, { s: "Site Visits", v: 380 }, { s: "Offers", v: 165 }, { s: "Closed", v: 92 }];
-  const brokerData = SEED_BROKERS.map(b => ({ name: b.name.split(" ")[0], rev: b.revenue, conv: b.conversion }));
-  return (
-    <div>
-      <SectionHeader title="Revenue Analytics" subtitle="Global currency view · multi-market">
-        <select value={period} onChange={e => setPeriod(e.target.value)} className="bg-input/40 border border-border rounded-md px-3 py-1.5 text-sm">
-          <option value="30d">Last 30 days</option><option value="90d">Last 90 days</option><option value="12m">Last 12 months</option>
-        </select>
-      </SectionHeader>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <GlowCard>
-          <h3 className="font-semibold mb-3">Monthly Revenue ($K)</h3>
-          <div className="h-72"><ResponsiveContainer><LineChart data={data}><CartesianGrid strokeDasharray="3 3" stroke="oklch(0.4 0.06 250 / 0.15)" /><XAxis dataKey="m" stroke="oklch(0.7 0.03 255)" fontSize={11} /><YAxis stroke="oklch(0.7 0.03 255)" fontSize={11} /><RTooltip contentStyle={{ background: "oklch(0.18 0.03 265)", border: "1px solid oklch(0.4 0.06 250 / 0.4)" }} /><Line dataKey="rev" stroke="var(--neon)" strokeWidth={2} dot={{ r: 3 }} /></LineChart></ResponsiveContainer></div>
-        </GlowCard>
-        <GlowCard>
-          <h3 className="font-semibold mb-3">Lead → Deal Funnel</h3>
-          <div className="h-72"><ResponsiveContainer><BarChart data={funnel} layout="vertical"><CartesianGrid strokeDasharray="3 3" stroke="oklch(0.4 0.06 250 / 0.15)" /><XAxis type="number" stroke="oklch(0.7 0.03 255)" fontSize={11} /><YAxis dataKey="s" type="category" stroke="oklch(0.7 0.03 255)" fontSize={11} width={80} /><RTooltip contentStyle={{ background: "oklch(0.18 0.03 265)", border: "1px solid oklch(0.4 0.06 250 / 0.4)" }} /><Bar dataKey="v" fill="var(--neon)" radius={6} /></BarChart></ResponsiveContainer></div>
-        </GlowCard>
-        <GlowCard>
-          <h3 className="font-semibold mb-3">Broker Performance ($M closed)</h3>
-          <div className="h-72"><ResponsiveContainer><BarChart data={brokerData}><CartesianGrid strokeDasharray="3 3" stroke="oklch(0.4 0.06 250 / 0.15)" /><XAxis dataKey="name" stroke="oklch(0.7 0.03 255)" fontSize={11} /><YAxis stroke="oklch(0.7 0.03 255)" fontSize={11} /><RTooltip contentStyle={{ background: "oklch(0.18 0.03 265)", border: "1px solid oklch(0.4 0.06 250 / 0.4)" }} /><Bar dataKey="rev" fill="oklch(0.7 0.25 300)" radius={6} /></BarChart></ResponsiveContainer></div>
-        </GlowCard>
-        <GlowCard>
-          <h3 className="font-semibold mb-3">AI Revenue Forecast</h3>
-          <div className="h-72"><ResponsiveContainer><LineChart data={data}><CartesianGrid strokeDasharray="3 3" stroke="oklch(0.4 0.06 250 / 0.15)" /><XAxis dataKey="m" stroke="oklch(0.7 0.03 255)" fontSize={11} /><YAxis stroke="oklch(0.7 0.03 255)" fontSize={11} /><RTooltip contentStyle={{ background: "oklch(0.18 0.03 265)", border: "1px solid oklch(0.4 0.06 250 / 0.4)" }} /><Legend /><Line dataKey="rev" name="Actual" stroke="var(--neon)" strokeWidth={2} /><Line dataKey="deals" name="Forecast" stroke="oklch(0.85 0.18 200)" strokeWidth={2} strokeDasharray="4 4" /></LineChart></ResponsiveContainer></div>
-        </GlowCard>
-      </div>
-    </div>
-  );
+  return <RevenueCommandCenter />;
 }
 
 // =============== Brokers ===============
 export function BrokersSection() {
-  const [open, setOpen] = useState<string | null>(null);
-  const sel = SEED_BROKERS.find(b => b.id === open);
-  return (
-    <div>
-      <SectionHeader title="Broker Performance" subtitle="Global team leaderboard" />
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-        {SEED_BROKERS.map(b => (
-          <GlowCard key={b.id} onClick={() => setOpen(b.id)}>
-            <div className="flex items-center gap-3">
-              <Avatar className="h-12 w-12 ring-2 ring-primary/30"><AvatarFallback className="bg-primary/30 font-semibold">{b.name.split(" ").map(n=>n[0]).join("")}</AvatarFallback></Avatar>
-              <div className="flex-1 min-w-0">
-                <div className="font-semibold truncate">{b.name}</div>
-                <div className="text-xs text-muted-foreground">{b.region}</div>
-              </div>
-              <Badge variant="outline" className="border-primary/40 text-primary">#{b.rank}</Badge>
-            </div>
-            <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
-              <Mini label="Leads" value={String(b.leads)} />
-              <Mini label="Response" value={b.response} />
-              <Mini label="Conv. %" value={`${b.conversion}%`} />
-              <Mini label="Revenue" value={`$${b.revenue}M`} />
-            </div>
-          </GlowCard>
-        ))}
-      </div>
-      <Dialog open={!!sel} onOpenChange={o => !o && setOpen(null)}>
-        <DialogContent className="glass-strong max-w-md">
-          {sel && <><DialogHeader><DialogTitle>{sel.name}</DialogTitle></DialogHeader><div className="text-sm text-muted-foreground">Region: {sel.region}</div><div className="grid grid-cols-2 gap-2 mt-3"><Mini label="Leads handled" value={String(sel.leads)} /><Mini label="Avg response" value={sel.response} /><Mini label="Conversion" value={`${sel.conversion}%`} /><Mini label="Revenue closed" value={`$${sel.revenue}M`} /></div></>}
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
+  return <BrokerPerformanceCommandCenter />;
 }
 
-// =============== Investor Intelligence (InvestorIntelligenceSection.tsx) ===============
-export { InvestorSection } from "./InvestorIntelligenceSection";
+// =============== Investor Intelligence (AreaGrowthSection.tsx) ===============
+export { InvestorSection } from "./AreaGrowthSection";
 
 // =============== Reports ===============
-type ReportDef = { name: string; rows: Array<Record<string, string | number>>; insights: string[] };
+import { cn } from "@/lib/utils";
+import {
+  type ReportRecord,
+  type ReportFilters,
+  type ReportType,
+  type ReportStatus,
+  fetchReports,
+  fetchReportById,
+  createReport,
+  updateReport,
+  deleteReport,
+  downloadReportCSV,
+  subscribeToReportsUpdates,
+} from "@/lib/reports-api";
 
-function useReportData(): Record<string, ReportDef> {
-  const { leads, appointments, properties } = useDashboard();
-  return {
-    "Lead Report": {
-      name: "Lead Report",
-      rows: leads.map(l => ({ Name: l.name, Country: l.country, City: l.city, Budget: l.budget, AIScore: l.aiScore, Urgency: l.urgency, Source: l.source })),
-      insights: ["Hot leads represent 38% of pipeline value", "Critical-urgency leads need contact within 4 hours", "Investor segment yields 2.4x higher conversion"],
-    },
-    "Revenue Report": {
-      name: "Revenue Report",
-      rows: SEED_BROKERS.map(b => ({ Broker: b.name, Region: b.region, RevenueM: b.revenue, Conversion: b.conversion, Leads: b.leads })),
-      insights: ["Middle East leads global revenue contribution", "Quarter-end push expected to add $2.4M", "Top performer Layla Hassan drives 28% of regional GMV"],
-    },
-    "Broker Report": {
-      name: "Broker Report",
-      rows: SEED_BROKERS.map(b => ({ Name: b.name, Rank: b.rank, Region: b.region, Response: b.response, Conv: `${b.conversion}%`, Revenue: `$${b.revenue}M` })),
-      insights: ["Avg response time across team: 3.05 min", "Top 2 brokers handle 41% of pipeline"],
-    },
-    "AI Forecast Report": {
-      name: "AI Forecast Report",
-      rows: [{ Period: "Next 30d", Revenue: "$2.4M", Confidence: "87%" }, { Period: "Next 90d", Revenue: "$8.4M", Confidence: "82%" }, { Period: "Next 180d", Revenue: "$16.1M", Confidence: "74%" }],
-      insights: ["Confidence decays beyond 90 days", "Demand index trending +24% MoM", "Risk: rate volatility in EU markets"],
-    },
-    "Trust Verification Report": {
-      name: "Trust Verification Report",
-      rows: [{ Check: "Ownership", Verified: "98%" }, { Check: "Builder reputation", Verified: "92%" }, { Check: "Fraud signals", Flagged: "4%" }, { Check: "Cross-border risk", Flagged: "18%" }],
-      insights: ["Ownership verification at all-time high", "Cross-border risk slightly elevated — review KYC threshold"],
-    },
-    "Property Report": {
-      name: "Property Report",
-      rows: properties.map(p => ({ Title: p.title, City: p.city, Price: p.price, ROI: p.roi, Yield: `${p.yield}%`, Appreciation: `${p.appreciation}%` })),
-      insights: ["Marina Skyline tops ROI chart at 92", "Avg appreciation across luxury inventory: 11.5%"],
-    },
-    "Appointment Report": {
-      name: "Appointment Report",
-      rows: appointments.map(a => ({ Lead: a.leadName, Property: a.property, Date: a.date, Time: a.time, Status: a.status, Broker: a.broker ?? "—" })),
-      insights: ["Confirmed-to-attended ratio: 88%", "Pending visits aging beyond 48h: review"],
-    },
-  };
-}
+const REPORT_TYPES: ReportType[] = [
+  "Lead Report",
+  "Revenue Report",
+  "Broker Performance Report",
+  "Property Report",
+  "Appointment Report",
+  "Trust Verification Report",
+  "AI Forecast Report",
+  "Global Market Report",
+];
 
-function downloadCsv(name: string, rows: Array<Record<string, string | number>>) {
-  if (!rows.length) { toast.error("No data to export"); return; }
-  const headers = Object.keys(rows[0]);
-  const escape = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const csv = [headers.join(","), ...rows.map(r => headers.map(h => escape(r[h])).join(","))].join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = `${name.replace(/\s+/g, "_")}.csv`; a.click();
-  URL.revokeObjectURL(url);
-}
+const REPORT_STATUS: ReportStatus[] = ["Draft", "Ready", "Running", "Failed", "Archived"];
+
+type ReportFilterState = {
+  type: "All" | ReportType;
+  country: "All" | string;
+  status: "All" | ReportStatus;
+  createdBy: "All" | string;
+  dateRange: { startDate: string; endDate: string };
+};
 
 export function ReportsSection() {
-  const reports = useReportData();
   const { pushActivity } = useDashboard();
-  const [open, setOpen] = useState<string | null>(null);
-  const [tab, setTab] = useState("overview");
+  const [reports, setReports] = useState<ReportRecord[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [filters, setFilters] = useState<ReportFilterState>({
+    type: "All",
+    country: "All",
+    status: "All",
+    createdBy: "All",
+    dateRange: { startDate: "", endDate: "" },
+  });
+
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detail, setDetail] = useState<ReportRecord | null>(null);
+
+  const [shareOpen, setShareOpen] = useState(false);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+
   const [refreshKey, setRefreshKey] = useState(0);
-  const sel = open ? reports[open] : null;
+
+  const filterOptions = useMemo(() => {
+    const creators = Array.from(new Set(reports.map((r) => r.created_by)));
+    const countries = Array.from(new Set(reports.map((r) => r.country)));
+    return {
+      creators,
+      countries,
+    };
+  }, [reports]);
+
+  const appliedFilters = useMemo<Partial<ReportFilters>>(
+    () => ({
+      type: filters.type,
+      country: filters.country,
+      status: filters.status,
+      createdBy: filters.createdBy,
+      dateRange: filters.dateRange,
+    }),
+    [filters],
+  );
+
+  const loadReports = async () => {
+    setLoading(true);
+    const toastId = toast.loading("Loading reports…");
+    try {
+      const data = await fetchReports(appliedFilters);
+      setReports(data);
+      toast.success("Reports updated", { id: toastId });
+    } catch {
+      toast.error("Failed to load reports", { id: toastId });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadReports();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (loading) return;
+    void loadReports();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appliedFilters]);
+
+  useEffect(() => {
+    const unsub = subscribeToReportsUpdates((next) => {
+      setReports((prev) => prev.map((r) => (r.report_id === next.report_id ? next : r)));
+    });
+    return () => {
+      unsub?.();
+    };
+  }, []);
+
+  const selected = useMemo(() => reports.find((r) => r.report_id === activeId) ?? null, [reports, activeId]);
+
+  const handleView = async (reportId: string) => {
+    setActiveId(reportId);
+    setDetailOpen(true);
+    setDetailLoading(true);
+    try {
+      const data = await fetchReportById(reportId);
+      setDetail(data);
+      if (!data) toast.error("Report not found");
+    } catch {
+      toast.error("Failed to load report");
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const handleDownloadCsv = async (reportId: string) => {
+    const csv = await downloadReportCSV(reportId);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    const report = reports.find((r) => r.report_id === reportId);
+    const name = report?.title ?? reportId;
+    const url = URL.createObjectURL(blob);
+    a.href = url;
+    a.download = `${name.replace(/\s+/g, "_").toLowerCase()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    pushActivity(`Report CSV exported: ${name}`, "sparkles", "report");
+    toast.success("CSV downloaded");
+  };
+
+  const handleRefresh = () => {
+    setRefreshKey((k) => k + 1);
+    void loadReports();
+    toast.success("Reports refreshed");
+  };
+
+  const handleShare = () => {
+    if (!selected) return;
+    setShareOpen(true);
+  };
+
+  const handleDelete = async () => {
+    if (!deleteId) return;
+    setDeleteLoading(true);
+    try {
+      const ok = await deleteReport(deleteId);
+      if (ok) {
+        setReports((prev) => prev.filter((r) => r.report_id !== deleteId));
+        toast.success("Report deleted");
+      } else {
+        toast.error("Failed to delete report");
+      }
+    } catch {
+      toast.error("Failed to delete report");
+    } finally {
+      setDeleteId(null);
+      setDeleteLoading(false);
+    }
+  };
+
+  const handleCreateQuickReport = async () => {
+    const base: Omit<ReportRecord, "report_id" | "created_at" | "updated_at" | "last_updated"> = {
+      title: "Custom Lead Snapshot",
+      type: "Lead Report",
+      description: "Ad-hoc snapshot of current lead funnel (mock).",
+      status: "Running",
+      date_range: "Today",
+      country: "Global",
+      created_by: "System",
+      data_count: 0,
+      download_url: null,
+    };
+    const created = await createReport(base);
+    setReports((prev) => [created, ...prev]);
+    toast.success("Report generation queued (mock)");
+  };
+
+  const summaryCounts = useMemo(() => {
+    const total = reports.length;
+    const ready = reports.filter((r) => r.status === "Ready").length;
+    const running = reports.filter((r) => r.status === "Running").length;
+    const failed = reports.filter((r) => r.status === "Failed").length;
+    return { total, ready, running, failed };
+  }, [reports]);
 
   return (
     <div>
-      <SectionHeader title="Reports" subtitle="Export-ready insights · CSV / PDF" />
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {Object.keys(reports).map(r => (
-          <GlowCard key={r}>
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-lg bg-primary/15 border border-primary/30 flex items-center justify-center"><FileText className="h-5 w-5 text-primary" /></div>
-              <div className="font-semibold flex-1">{r}</div>
+      <SectionHeader
+        title="Reports"
+        subtitle="Supabase-ready report catalog with CSV exports and AI-ready summaries."
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" onClick={handleRefresh} disabled={loading}>
+            <Download className="mr-2 h-3.5 w-3.5" />
+            Refresh
+          </Button>
+          <Button size="sm" className="neon-border" onClick={() => void handleCreateQuickReport()}>
+            <Sparkles className="mr-2 h-3.5 w-3.5" />
+            Quick Lead Snapshot
+          </Button>
+        </div>
+      </SectionHeader>
+
+      {/* Filters */}
+      <GlowCard className="mb-4 !p-4 overflow-hidden">
+        <div className="grid gap-3 grid-cols-1 md:grid-cols-2 lg:grid-cols-[repeat(5,minmax(180px,1fr))]">
+          <div className="space-y-1 min-w-0">
+            <div className="text-xs uppercase tracking-widest text-muted-foreground">Report Type</div>
+            <Select
+              value={filters.type}
+              onValueChange={(v) => setFilters((prev) => ({ ...prev, type: v as ReportFilterState["type"] }))}
+            >
+              <SelectTrigger className="border-white/10 bg-black/30 text-white">
+                <SelectValue placeholder="Type" />
+              </SelectTrigger>
+              <SelectContent className="bg-slate-950 text-white border-white/10">
+                <SelectItem value="All">All</SelectItem>
+                {REPORT_TYPES.map((t) => (
+                  <SelectItem key={t} value={t}>
+                    {t}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-1 min-w-0">
+            <div className="text-xs uppercase tracking-widest text-muted-foreground">Country</div>
+            <Select
+              value={filters.country}
+              onValueChange={(v) => setFilters((prev) => ({ ...prev, country: v as ReportFilterState["country"] }))}
+            >
+              <SelectTrigger className="border-white/10 bg-black/30 text-white">
+                <SelectValue placeholder="Country" />
+              </SelectTrigger>
+              <SelectContent className="bg-slate-950 text-white border-white/10">
+                <SelectItem value="All">All</SelectItem>
+                {filterOptions.countries.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {c}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-1 min-w-0">
+            <div className="text-xs uppercase tracking-widest text-muted-foreground">Status</div>
+            <Select
+              value={filters.status}
+              onValueChange={(v) => setFilters((prev) => ({ ...prev, status: v as ReportFilterState["status"] }))}
+            >
+              <SelectTrigger className="border-white/10 bg-black/30 text-white">
+                <SelectValue placeholder="Status" />
+              </SelectTrigger>
+              <SelectContent className="bg-slate-950 text-white border-white/10">
+                <SelectItem value="All">All</SelectItem>
+                {REPORT_STATUS.map((s) => (
+                  <SelectItem key={s} value={s}>
+                    {s}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-1 min-w-0">
+            <div className="text-xs uppercase tracking-widest text-muted-foreground">Created By</div>
+            <Select
+              value={filters.createdBy}
+              onValueChange={(v) => setFilters((prev) => ({ ...prev, createdBy: v as ReportFilterState["createdBy"] }))}
+            >
+              <SelectTrigger className="border-white/10 bg-black/30 text-white">
+                <SelectValue placeholder="Created By" />
+              </SelectTrigger>
+              <SelectContent className="bg-slate-950 text-white border-white/10">
+                <SelectItem value="All">All</SelectItem>
+                {filterOptions.creators.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {c}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-1 min-w-0">
+            <div className="text-xs uppercase tracking-widest text-muted-foreground">Date Range</div>
+            <div className="flex gap-2 flex-wrap">
+              <Input
+                type="date"
+                value={filters.dateRange.startDate}
+                onChange={(e) =>
+                  setFilters((prev) => ({ ...prev, dateRange: { ...prev.dateRange, startDate: e.target.value } }))
+                }
+                className="bg-input/40 border border-white/10 text-xs min-w-0 flex-1"
+              />
+              <Input
+                type="date"
+                value={filters.dateRange.endDate}
+                onChange={(e) =>
+                  setFilters((prev) => ({ ...prev, dateRange: { ...prev.dateRange, endDate: e.target.value } }))
+                }
+                className="bg-input/40 border border-white/10 text-xs min-w-0 flex-1"
+              />
             </div>
-            <p className="text-xs text-muted-foreground mt-3">Aggregated insights with AI commentary and trends.</p>
-            <div className="flex gap-2 mt-3 flex-wrap">
-              <Button size="sm" variant="outline" onClick={() => { setOpen(r); setTab("overview"); }}>View</Button>
-              <Button size="sm" variant="outline" onClick={() => { downloadCsv(r, reports[r].rows); pushActivity(`Report downloaded: ${r}`, "sparkles", "report"); toast.success(`${r}.csv downloaded`); }}><Download className="h-3.5 w-3.5" /> CSV</Button>
-              <Button size="sm" variant="outline" onClick={() => { window.print(); }}>PDF</Button>
-              <Button size="sm" variant="ghost" onClick={() => { setRefreshKey(k => k + 1); toast.success("Report refreshed"); }}>↻</Button>
-            </div>
-          </GlowCard>
-        ))}
+          </div>
+        </div>
+
+        <div className="mt-3 flex flex-wrap gap-2 justify-between items-center">
+          <div className="flex gap-2">
+            <Badge variant="outline" className="border-white/10">
+              Total: {summaryCounts.total}
+            </Badge>
+            <Badge variant="outline" className="border-emerald-400/40 text-emerald-300">
+              Ready: {summaryCounts.ready}
+            </Badge>
+            <Badge variant="outline" className="border-cyan-400/40 text-cyan-200">
+              Running: {summaryCounts.running}
+            </Badge>
+            {summaryCounts.failed ? (
+              <Badge variant="outline" className="border-red-400/40 text-red-300">
+                Failed: {summaryCounts.failed}
+              </Badge>
+            ) : null}
+          </div>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                setFilters({
+                  type: "All",
+                  country: "All",
+                  status: "All",
+                  createdBy: "All",
+                  dateRange: { startDate: "", endDate: "" },
+                })
+              }
+            >
+              Clear Filters
+            </Button>
+          </div>
+        </div>
+      </GlowCard>
+
+      {/* Cards / table responsive layout */}
+      <div className="hidden md:block">
+        <GlowCard className="!p-0 overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow className="border-b border-white/10">
+                <TableHead>Title</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>Country</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Date Range</TableHead>
+                <TableHead>Rows</TableHead>
+                <TableHead>Updated</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
+                <TableRow>
+                  <TableCell colSpan={8} className="py-6 text-center text-sm text-muted-foreground">
+                    <div className="flex items-center justify-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading reports…
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : reports.length ? (
+                reports.map((r) => (
+                  <TableRow key={r.report_id} className="border-border/20 hover:bg-white/5">
+                    <TableCell className="max-w-[220px]">
+                      <div className="flex items-center gap-2">
+                        <div className="h-8 w-8 rounded-md bg-primary/10 border border-primary/40 flex items-center justify-center">
+                          <FileText className="h-4 w-4 text-primary" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium truncate">{r.title}</div>
+                          <div className="text-[11px] text-muted-foreground truncate">
+                            {r.created_by} · {r.country}
+                          </div>
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-xs">{r.type}</TableCell>
+                    <TableCell className="whitespace-nowrap text-xs">{r.country}</TableCell>
+                    <TableCell className="whitespace-nowrap text-xs">
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          "border-white/10",
+                          r.status === "Ready"
+                            ? "text-emerald-300 border-emerald-400/40"
+                            : r.status === "Running"
+                              ? "text-cyan-200 border-cyan-400/40"
+                              : r.status === "Failed"
+                                ? "text-red-300 border-red-400/40"
+                                : "text-slate-200",
+                        )}
+                      >
+                        {r.status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-xs">{r.date_range}</TableCell>
+                    <TableCell className="whitespace-nowrap text-xs">{r.data_count}</TableCell>
+                    <TableCell className="whitespace-nowrap text-xs">
+                      {new Date(r.last_updated).toLocaleString()}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-xs text-right">
+                      <div className="inline-flex gap-1">
+                        <Button size="xs" variant="outline" onClick={() => void handleView(r.report_id)}>
+                          View
+                        </Button>
+                        <Button size="xs" variant="outline" onClick={() => void handleDownloadCsv(r.report_id)}>
+                          CSV
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          onClick={() => toast.info("PDF export coming soon")}
+                        >
+                          PDF
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          onClick={() => {
+                            setDeleteId(r.report_id);
+                          }}
+                        >
+                          Delete
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              ) : (
+                <TableRow>
+                  <TableCell colSpan={8} className="py-6 text-center text-sm text-muted-foreground">
+                    No reports found with current filters.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </GlowCard>
       </div>
 
-      <Dialog open={!!sel} onOpenChange={o => !o && setOpen(null)}>
-        <DialogContent className="glass-strong max-w-3xl max-h-[90vh] overflow-y-auto scrollbar-thin">
-          {sel && (
-            <>
-              <DialogHeader><DialogTitle>{sel.name}</DialogTitle></DialogHeader>
-              <Tabs value={tab} onValueChange={setTab}>
-                <TabsList className="glass">
-                  <TabsTrigger value="overview">Overview</TabsTrigger>
-                  <TabsTrigger value="data">Data Table</TabsTrigger>
-                  <TabsTrigger value="charts">Charts</TabsTrigger>
-                  <TabsTrigger value="ai">AI Insights</TabsTrigger>
-                  <TabsTrigger value="recs">Recommendations</TabsTrigger>
-                </TabsList>
-                <TabsContent value="overview" key={refreshKey}>
-                  <div className="grid grid-cols-3 gap-2 mt-3">
-                    <Mini label="Rows" value={String(sel.rows.length)} />
-                    <Mini label="Insights" value={String(sel.insights.length)} />
-                    <Mini label="Generated" value="just now" />
+      {/* Mobile cards */}
+      <div className="grid grid-cols-1 gap-3 md:hidden">
+        {loading ? (
+          <GlowCard className="flex items-center gap-2 justify-center">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span className="text-sm">Loading reports…</span>
+          </GlowCard>
+        ) : reports.length ? (
+          reports.map((r) => (
+            <GlowCard key={r.report_id} className="!p-4">
+              <div className="flex items-start gap-3">
+                <div className="h-9 w-9 rounded-md bg-primary/10 border border-primary/40 flex items-center justify-center">
+                  <FileText className="h-4 w-4 text-primary" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium text-sm truncate">{r.title}</div>
+                  <div className="text-[11px] text-muted-foreground">
+                    {r.type} · {r.country}
                   </div>
-                  <p className="text-sm text-muted-foreground mt-3">{sel.insights[0]}</p>
-                </TabsContent>
-                <TabsContent value="data">
-                  <div className="overflow-x-auto mt-3">
-                    <table className="w-full text-sm">
-                      <thead><tr className="text-left text-xs uppercase tracking-wider text-muted-foreground border-b border-border/40">{Object.keys(sel.rows[0] ?? {}).map(h => <th key={h} className="py-2 pr-3">{h}</th>)}</tr></thead>
-                      <tbody>{sel.rows.slice(0, 12).map((r, i) => <tr key={i} className="border-b border-border/20">{Object.values(r).map((v, j) => <td key={j} className="py-2 pr-3">{String(v)}</td>)}</tr>)}</tbody>
-                    </table>
+                  <div className="mt-1 text-[11px] text-muted-foreground">
+                    Rows: {r.data_count} · {new Date(r.last_updated).toLocaleTimeString()}
                   </div>
-                </TabsContent>
-                <TabsContent value="charts">
-                  <div className="h-64 mt-3"><ResponsiveContainer><BarChart data={sel.rows.slice(0, 8).map((r, i) => ({ name: String(Object.values(r)[0]).slice(0, 10), v: Number(Object.values(r).find(x => typeof x === "number")) || (i + 1) * 10 }))}><CartesianGrid strokeDasharray="3 3" stroke="oklch(0.4 0.06 250 / 0.15)" /><XAxis dataKey="name" stroke="oklch(0.7 0.03 255)" fontSize={11} /><YAxis stroke="oklch(0.7 0.03 255)" fontSize={11} /><RTooltip contentStyle={{ background: "oklch(0.18 0.03 265)", border: "1px solid oklch(0.4 0.06 250 / 0.4)" }} /><Bar dataKey="v" fill="var(--neon)" radius={6} /></BarChart></ResponsiveContainer></div>
-                </TabsContent>
-                <TabsContent value="ai">
-                  <ul className="space-y-2 mt-3">{sel.insights.map((s, i) => <li key={i} className="glass rounded-lg p-3 text-sm flex gap-2"><Sparkles className="h-4 w-4 text-primary shrink-0 mt-0.5" /> {s}</li>)}</ul>
-                </TabsContent>
-                <TabsContent value="recs">
-                  <div className="space-y-2 mt-3">
-                    <div className="glass rounded-lg p-3 text-sm">→ Schedule executive review with top performers</div>
-                    <div className="glass rounded-lg p-3 text-sm">→ Increase outbound capacity by 18% in next 30 days</div>
-                    <div className="glass rounded-lg p-3 text-sm">→ Re-target dormant high-AI-score leads via WhatsApp</div>
+                </div>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "border-white/10 text-[10px]",
+                    r.status === "Ready"
+                      ? "text-emerald-300 border-emerald-400/40"
+                      : r.status === "Running"
+                        ? "text-cyan-200 border-cyan-400/40"
+                        : r.status === "Failed"
+                          ? "text-red-300 border-red-400/40"
+                          : "text-slate-200",
+                  )}
+                >
+                  {r.status}
+                </Badge>
+              </div>
+
+              <p className="mt-2 text-xs text-muted-foreground line-clamp-2">{r.description}</p>
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button size="xs" className="neon-border" onClick={() => void handleView(r.report_id)}>
+                  View Report
+                </Button>
+                <Button size="xs" variant="outline" onClick={() => void handleDownloadCsv(r.report_id)}>
+                  CSV
+                </Button>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  onClick={() => toast.info("PDF export coming soon")}
+                >
+                  PDF
+                </Button>
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  onClick={() => {
+                    setDeleteId(r.report_id);
+                  }}
+                >
+                  Delete
+                </Button>
+              </div>
+            </GlowCard>
+          ))
+        ) : (
+          <GlowCard className="text-sm text-muted-foreground text-center py-6">
+            No reports found with current filters.
+          </GlowCard>
+        )}
+      </div>
+
+      {/* Detail drawer (desktop) / full-screen (mobile) */}
+      <Dialog
+        open={detailOpen}
+        onOpenChange={(o) => {
+          if (!o) {
+            setDetailOpen(false);
+            setActiveId(null);
+            setDetail(null);
+            setShareOpen(false);
+          }
+        }}
+      >
+        <DialogContent className="glass-strong max-w-4xl max-h-[90vh] overflow-hidden p-0">
+          <div className="h-full flex flex-col">
+            <div className="px-6 pt-5 pb-3 border-b border-white/10">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <DialogTitle className="text-lg">
+                    {detail ? detail.title : selected?.title ?? "Report"}
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-muted-foreground mt-1">
+                    {selected
+                      ? `${selected.type} · ${selected.country} · ${selected.date_range}`
+                      : null}
+                  </DialogDescription>
+                </div>
+                {selected ? (
+                  <Badge variant="outline" className="border-white/10 text-[11px]">
+                    {selected.status}
+                  </Badge>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-6 pb-6 pt-4 space-y-4">
+              {detailLoading && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading report…
+                </div>
+              )}
+
+              {selected && !detailLoading && (
+                <>
+                  {/* Summary KPIs */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <Mini label="Rows" value={String(selected.data_count)} />
+                    <Mini
+                      label="Status"
+                      value={selected.status}
+                      tone={
+                        selected.status === "Ready"
+                          ? "success"
+                          : selected.status === "Running"
+                            ? "info"
+                            : selected.status === "Failed"
+                              ? "danger"
+                              : "muted"
+                      }
+                    />
+                    <Mini
+                      label="Last updated"
+                      value={new Date(selected.last_updated).toLocaleString()}
+                    />
                   </div>
-                </TabsContent>
-              </Tabs>
-              <div className="flex gap-2 justify-end pt-3"><Button variant="outline" onClick={() => downloadCsv(sel.name, sel.rows)}><Download className="h-4 w-4" /> CSV</Button></div>
-            </>
-          )}
+
+                  {/* AI insight & description */}
+                  <GlowCard className="!p-4">
+                    <div className="flex items-start gap-3">
+                      <Sparkles className="h-4 w-4 text-primary mt-0.5" />
+                      <div>
+                        <div className="text-sm font-semibold">AI-ready description</div>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {selected.description}
+                        </p>
+                      </div>
+                    </div>
+                  </GlowCard>
+
+                  {/* Placeholder data table + chart skeleton */}
+                  <div className="grid grid-cols-1 lg:grid-cols-[1.2fr_1fr] gap-4">
+                    <Card className="glass border-white/10 p-3">
+                      <div className="text-sm font-semibold mb-2">Sample data table</div>
+                      <div className="text-xs text-muted-foreground mb-2">
+                        Later connect this to Supabase `reports` + `report_exports`.
+                      </div>
+                      <div className="border border-border/40 rounded-lg p-3 text-xs text-muted-foreground">
+                        Data rows for this report will be hydrated from Supabase. For now we only
+                        track meta fields like counts and status.
+                      </div>
+                    </Card>
+                    <Card className="glass border-white/10 p-3">
+                      <div className="text-sm font-semibold mb-2">Chart placeholder</div>
+                      <div className="text-xs text-muted-foreground mb-2">
+                        Plug charts into `report_exports` aggregated metrics.
+                      </div>
+                      <div className="h-32 rounded-lg border border-dashed border-border/50 flex items-center justify-center text-[11px] text-muted-foreground">
+                        Chart area (connect to Supabase metrics later)
+                      </div>
+                    </Card>
+                  </div>
+
+                  {/* Recommended actions */}
+                  <Card className="glass border-white/10 p-4">
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      <div>
+                        <div className="text-sm font-semibold">Recommendations</div>
+                        <div className="text-xs text-muted-foreground mt-1">
+                          Use this report to drive weekly revenue and broker reviews.
+                        </div>
+                      </div>
+                      <div className="flex gap-2 flex-wrap">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void handleDownloadCsv(selected.report_id)}
+                        >
+                          <Download className="mr-2 h-3.5 w-3.5" />
+                          Export CSV
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => toast.info("PDF export coming soon")}
+                        >
+                          <FileText className="mr-2 h-3.5 w-3.5" />
+                          Download PDF
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={handleShare}
+                        >
+                          <Share2 className="mr-2 h-3.5 w-3.5" />
+                          Share
+                        </Button>
+                      </div>
+                    </div>
+                  </Card>
+                </>
+              )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Share modal */}
+      <Dialog open={shareOpen} onOpenChange={(o) => !o && setShareOpen(false)}>
+        <DialogContent className="glass-strong max-w-md">
+          <DialogHeader>
+            <DialogTitle>Share report</DialogTitle>
+            <DialogDescription className="text-slate-400">
+              Share via WhatsApp, email, or copy a link for this report.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Button
+              className="w-full"
+              onClick={() => {
+                const title = selected?.title ?? "Report";
+                const url =
+                  typeof window !== "undefined"
+                    ? `${window.location.origin}/reports/${selected?.report_id ?? ""}`
+                    : "";
+                window.open(
+                  `https://wa.me/?text=${encodeURIComponent(`${title}\n${url}`)}`,
+                  "_blank",
+                  "noopener,noreferrer",
+                );
+                toast.success("WhatsApp opened");
+              }}
+              disabled={!selected}
+            >
+              <Share2 className="mr-2 h-4 w-4" />
+              WhatsApp
+            </Button>
+            <Button
+              className="w-full"
+              variant="outline"
+              onClick={() => {
+                const title = selected?.title ?? "Report";
+                const url =
+                  typeof window !== "undefined"
+                    ? `${window.location.origin}/reports/${selected?.report_id ?? ""}`
+                    : "";
+                window.location.href = `mailto:?subject=${encodeURIComponent(title)}&body=${encodeURIComponent(
+                  url,
+                )}`;
+                toast.success("Email draft opened");
+              }}
+              disabled={!selected}
+            >
+              <Mail className="mr-2 h-4 w-4" />
+              Email
+            </Button>
+            <Button
+              className="w-full"
+              variant="outline"
+              onClick={async () => {
+                try {
+                  const url =
+                    typeof window !== "undefined"
+                      ? `${window.location.origin}/reports/${selected?.report_id ?? ""}`
+                      : "";
+                  await navigator.clipboard.writeText(url);
+                  toast.success("Link copied");
+                } catch {
+                  toast.error("Failed to copy link");
+                }
+              }}
+              disabled={!selected}
+            >
+              <Copy className="mr-2 h-4 w-4" />
+              Copy link
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirmation */}
+      <Dialog open={!!deleteId} onOpenChange={(o) => !o && !deleteLoading && setDeleteId(null)}>
+        <DialogContent className="glass-strong max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete report?</DialogTitle>
+            <DialogDescription className="text-slate-400">
+              This will remove the report metadata from the command center. Exports already
+              downloaded will not be affected.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              variant="outline"
+              onClick={() => setDeleteId(null)}
+              disabled={deleteLoading}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => void handleDelete()}
+              disabled={deleteLoading}
+            >
+              {deleteLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Delete
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
@@ -1087,56 +2699,7 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 export function AIInsightsSection() {
-  const { insights, updateInsight, pushActivity, setActive } = useDashboard();
-  const [open, setOpen] = useState<string | null>(null);
-  const sel = insights.find(i => i.id === open);
-
-  const setStatus = (id: string, status: "New" | "In Progress" | "Resolved" | "Ignored", label: string) => {
-    updateInsight(id, { status });
-    pushActivity(`Insight ${label}: ${insights.find(i => i.id === id)?.title}`, "sparkles", "ai");
-    toast.success(`Insight marked ${status}`);
-  };
-
-  return (
-    <div>
-      <SectionHeader title="AI Insights" subtitle="What happened · why · supporting data · suggested action · risk if ignored" />
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {insights.map(i => (
-          <GlowCard key={i.id} onClick={() => setOpen(i.id)}>
-            <div className="flex items-center justify-between gap-2">
-              <Badge variant="outline" className={urgencyColor(i.urgency)}>{i.urgency}</Badge>
-              <Badge variant="outline" className={STATUS_COLOR[i.status]}>{i.status}</Badge>
-            </div>
-            <div className="mt-2 font-semibold">{i.title}</div>
-            <p className="text-sm text-muted-foreground mt-1">{i.desc}</p>
-          </GlowCard>
-        ))}
-      </div>
-      <Dialog open={!!sel} onOpenChange={o => !o && setOpen(null)}>
-        <DialogContent className="glass-strong max-w-xl max-h-[90vh] overflow-y-auto scrollbar-thin">
-          {sel && (
-            <>
-              <DialogHeader><DialogTitle className="flex items-center gap-2">{sel.title} <Badge variant="outline" className={STATUS_COLOR[sel.status]}>{sel.status}</Badge></DialogTitle></DialogHeader>
-              <div className="space-y-3">
-                <Block label="What happened" body={sel.what} />
-                <Block label="Why it matters" body={sel.why} />
-                <Block label="Supporting data" body={sel.data} />
-                <Block label="Suggested action" body={sel.action} accent />
-                <Block label="Risk if ignored" body={sel.risk} />
-              </div>
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-2 pt-3 border-t border-border/40">
-                <Button size="sm" variant="outline" onClick={() => { setActive("leads"); setOpen(null); }}>View Leads</Button>
-                <Button size="sm" variant="outline" onClick={() => { setStatus(sel.id, "In Progress", "follow-up created"); }}>Create Follow-up</Button>
-                <Button size="sm" variant="outline" onClick={() => { setStatus(sel.id, "In Progress", "broker assigned"); }}>Assign Broker</Button>
-                <Button size="sm" onClick={() => { setStatus(sel.id, "Resolved", "resolved"); setOpen(null); }} className="bg-[oklch(0.82_0.2_150)] text-black">Mark Done</Button>
-                <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => { setStatus(sel.id, "Ignored", "ignored"); setOpen(null); }}>Ignore</Button>
-              </div>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
+  return <AiIntelligenceCommandHub />;
 }
 
 function Block({ label, body, accent }: { label: string; body: string; accent?: boolean }) {
@@ -1145,25 +2708,7 @@ function Block({ label, body, accent }: { label: string; body: string; accent?: 
 
 // =============== Forecast (AI Market Forecasting Engine) ===============
 export function ForecastSection() {
-  const data = Array.from({ length: 6 }, (_, i) => ({ m: ["Jun","Jul","Aug","Sep","Oct","Nov"][i], rev: 1200 + i * 180 + Math.sin(i) * 100, leads: 120 + i * 22, demand: 65 + i * 4 }));
-  const pie = [{ n: "Buy", v: 42 }, { n: "Invest", v: 31 }, { n: "Rent", v: 18 }, { n: "Lease", v: 9 }];
-  const COLORS = ["var(--neon)", "oklch(0.7 0.25 300)", "oklch(0.85 0.18 200)", "oklch(0.82 0.2 150)"];
-  return (
-    <div>
-      <SectionHeader title="AI Market Forecasting Engine" subtitle="Revenue · conversions · area growth · rental demand · investor activity · risk" />
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <GlowCard><div className="text-xs uppercase tracking-widest text-muted-foreground">Predicted Revenue</div><div className="text-3xl font-bold mt-1 neon-text">$8.4M</div><div className="text-xs text-muted-foreground">next 6 months · 87% confidence</div></GlowCard>
-        <GlowCard><div className="text-xs uppercase tracking-widest text-muted-foreground">Lead Conversions</div><div className="text-3xl font-bold mt-1">412</div><div className="text-xs text-muted-foreground">expected · +24% MoM</div></GlowCard>
-        <GlowCard><div className="text-xs uppercase tracking-widest text-muted-foreground">AI Confidence</div><div className="text-3xl font-bold mt-1 text-[oklch(0.82_0.2_150)]">94%</div><div className="text-xs text-muted-foreground">model precision</div></GlowCard>
-        <GlowCard className="lg:col-span-2"><h3 className="font-semibold mb-3">Multi-signal Forecast</h3><div className="h-72"><ResponsiveContainer><LineChart data={data}><CartesianGrid strokeDasharray="3 3" stroke="oklch(0.4 0.06 250 / 0.15)" /><XAxis dataKey="m" stroke="oklch(0.7 0.03 255)" fontSize={11} /><YAxis stroke="oklch(0.7 0.03 255)" fontSize={11} /><RTooltip contentStyle={{ background: "oklch(0.18 0.03 265)", border: "1px solid oklch(0.4 0.06 250 / 0.4)" }} /><Legend /><Line dataKey="rev" name="Revenue" stroke="var(--neon)" strokeWidth={2} /><Line dataKey="leads" name="Leads" stroke="oklch(0.7 0.25 300)" strokeWidth={2} /><Line dataKey="demand" name="Demand Index" stroke="oklch(0.85 0.18 200)" strokeWidth={2} /></LineChart></ResponsiveContainer></div></GlowCard>
-        <GlowCard><h3 className="font-semibold mb-3">Investor Opportunity Mix</h3><div className="h-72"><ResponsiveContainer><PieChart><Pie data={pie} dataKey="v" nameKey="n" innerRadius={50} outerRadius={90} paddingAngle={3}>{pie.map((_, i) => <Cell key={i} fill={COLORS[i]} />)}</Pie><RTooltip contentStyle={{ background: "oklch(0.18 0.03 265)", border: "1px solid oklch(0.4 0.06 250 / 0.4)" }} /><Legend /></PieChart></ResponsiveContainer></div></GlowCard>
-        <GlowCard className="lg:col-span-3">
-          <div className="text-xs uppercase tracking-widest text-muted-foreground mb-2">Trust disclaimer</div>
-          <p className="text-sm text-muted-foreground">Forecasts use multi-signal ensemble models calibrated on 18 months of regional data. Confidence intervals widen beyond 90 days. Decisions should incorporate broker context.</p>
-        </GlowCard>
-      </div>
-    </div>
-  );
+  return <AiMarketForecastingEngine />;
 }
 
 export { HeatmapsSection } from "./HeatmapsSection";
