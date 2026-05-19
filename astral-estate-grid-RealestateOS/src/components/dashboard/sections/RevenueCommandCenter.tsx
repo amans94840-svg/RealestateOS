@@ -317,7 +317,7 @@ export function RevenueCommandCenter() {
     if (!analyticsOrEmpty) return "";
     const total = formatRevenue(analyticsOrEmpty.totalRevenue, analyticsOrEmpty.country, currencySymbolForUi);
     const predicted = formatRevenue(analyticsOrEmpty.predictedRevenue, analyticsOrEmpty.country, currencySymbolForUi);
-    return `Revenue Command Center\nCountry: ${analyticsOrEmpty.country}\nPeriod: ${durationLabel(selectedDuration, customRange)}\nClosed: ${total}\nAI Forecast: ${predicted} (confidence ${analyticsOrEmpty.predictionConfidencePercent}%)`;
+    return `Revenue Analytics\nCountry: ${analyticsOrEmpty.country}\nPeriod: ${durationLabel(selectedDuration, customRange)}\nClosed: ${total}\nAI Forecast: ${predicted} (confidence ${analyticsOrEmpty.predictionConfidencePercent}%)`;
   };
 
   const handleWhatsAppShare = () => {
@@ -333,7 +333,7 @@ export function RevenueCommandCenter() {
     if (!analyticsOrEmpty) return;
     const text = shareSummary();
     if (typeof window !== "undefined") {
-      window.location.href = `mailto:?subject=${encodeURIComponent("Revenue Command Center")}&body=${encodeURIComponent(text)}`;
+      window.location.href = `mailto:?subject=${encodeURIComponent("Revenue Analytics")}&body=${encodeURIComponent(text)}`;
     }
     toast.success("Email draft opened");
   };
@@ -373,7 +373,7 @@ export function RevenueCommandCenter() {
   return (
     <div className="space-y-6">
       <SectionHeader
-        title="Revenue Command Center"
+        title="Revenue Analytics"
         subtitle="Track revenue, closed deals, broker performance, AI forecast, and country-wise business growth in real time."
       >
         <div className="flex items-center gap-2 flex-wrap">

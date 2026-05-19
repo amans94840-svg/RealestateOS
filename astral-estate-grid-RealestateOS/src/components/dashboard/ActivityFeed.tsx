@@ -21,7 +21,7 @@ export function ActivityFeed() {
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
   return (
-    <div className="glass rounded-2xl p-5">
+    <div className="command-card rounded-2xl p-5">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-semibold flex items-center gap-2">
           <span className="pulse-dot" /> Live Activity Feed

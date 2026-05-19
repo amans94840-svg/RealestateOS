@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useDashboard } from "@/lib/dashboard-store";
-import { GlowCard, SectionHeader } from "../utils";
+import { GlowCard, KpiStatCard, SectionHeader } from "../utils";
 import { ActivityFeed } from "../ActivityFeed";
 import { cn } from "@/lib/utils";
 import {
@@ -52,8 +52,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { formatRevenue, getCurrencyRuleForCountry } from "@/lib/revenue-utils";
 import {
   exportDashboardCSV,
+  fetchDashboardMetricsForWorkspace,
   fetchDashboardMetrics,
-  subscribeToDashboardUpdates,
+  subscribeToDashboardMetrics,
+  refreshDashboardData,
   type DashboardCountry,
   type DashboardDurationKey,
   type DashboardMetrics,
@@ -89,6 +91,8 @@ function kpiBadgeText(n: number, positiveText: string, negativeText: string) {
 
 export function DashboardSection() {
   const { setActive, setLeadFilters, pushActivity } = useDashboard();
+  const { user } = useDashboard();
+  const workspaceId = user?.company ?? undefined;
 
   const [selectedCountry, setSelectedCountry] = useState<DashboardCountry>(DEFAULT_COUNTRY);
   const [selectedDuration, setSelectedDuration] = useState<DashboardDurationKey>(DEFAULT_DURATION);
@@ -114,7 +118,7 @@ export function DashboardSection() {
     setIsUpdating(true);
     const toastId = toast.loading("Updating dashboard metrics…");
     try {
-      const data = await fetchDashboardMetrics(selectedCountry, selectedDuration, selectedDuration === "custom" ? customRange : null);
+      const data = await refreshDashboardData(workspaceId, selectedCountry, selectedDuration, selectedDuration === "custom" ? customRange : null);
       setMetrics(data);
       pushActivity(
         `Dashboard updated: ${selectedCountry} · ${durationLabel(selectedDuration)}`,
@@ -131,6 +135,9 @@ export function DashboardSection() {
 
   useEffect(() => {
     void updateMetrics({ reason: "initial" });
+    const onRefresh = () => void updateMetrics({ reason: "topnav-refresh" });
+    window.addEventListener("reos-refresh-dashboard", onRefresh);
+    return () => window.removeEventListener("reos-refresh-dashboard", onRefresh);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -141,13 +148,11 @@ export function DashboardSection() {
   }, [selectedCountry, selectedDuration]);
 
   useEffect(() => {
-    const unsubscribe = subscribeToDashboardUpdates(({ country, duration, metrics: next }) => {
-      if (country === selectedCountry && duration === selectedDuration) {
-        setMetrics(next);
-      }
+    const unsub = subscribeToDashboardMetrics(workspaceId, selectedCountry, selectedDuration, (next) => {
+      setMetrics(next);
     });
-    return unsubscribe;
-  }, [selectedCountry, selectedDuration]);
+    return unsub;
+  }, [workspaceId, selectedCountry, selectedDuration]);
 
   const cSym = currencySymbol(selectedCountry);
 
@@ -159,7 +164,7 @@ export function DashboardSection() {
     const profit = formatRevenue(metrics.profit, selectedCountry, cSym);
     const loss = formatRevenue(metrics.loss, selectedCountry, cSym);
     return [
-      "Business Command Center",
+      "Dashboard",
       `Country: ${selectedCountry}`,
       `Duration: ${metrics.duration}`,
       `Revenue: ${revenue}`,
@@ -180,7 +185,7 @@ export function DashboardSection() {
   const handleShareEmail = () => {
     if (!metrics) return;
     if (typeof window !== "undefined") {
-      window.location.href = `mailto:?subject=${encodeURIComponent("Business Command Center")}&body=${encodeURIComponent(shareSummaryText)}`;
+      window.location.href = `mailto:?subject=${encodeURIComponent("Dashboard")}&body=${encodeURIComponent(shareSummaryText)}`;
     }
     toast.success("Email draft opened");
   };
@@ -339,8 +344,8 @@ export function DashboardSection() {
   return (
     <div className="space-y-6">
       <SectionHeader
-        title="Business Command Center"
-        subtitle="Track profit, growth, loss, leads, hot leads, revenue, pipeline, appointments, broker performance, and AI recommendations."
+        title="Dashboard"
+        subtitle="Real-time overview of your real estate business performance."
       >
         <div className="flex items-center gap-2 flex-wrap">
           <Button variant="outline" size="sm" onClick={() => setShareOpen(true)} disabled={!metrics}>
@@ -453,7 +458,7 @@ export function DashboardSection() {
         <div className="glass rounded-2xl p-6 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <span className="h-2 w-2 rounded-full bg-primary shadow-[0_0_10px_var(--neon)] animate-pulse" />
-            <div className="text-sm text-slate-300">Loading dashboard command center…</div>
+            <div className="text-sm text-slate-300">Loading dashboard…</div>
           </div>
           <Badge variant="outline" className="border-white/10">Realtime mock</Badge>
         </div>
@@ -463,40 +468,31 @@ export function DashboardSection() {
 
       {metrics ? (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
             {kpiCards.map((k) => (
-              <GlowCard
+              <KpiStatCard
                 key={k.label}
+                label={k.label}
+                value={k.value}
+                sub={typeof k.sub === "string" ? k.sub : undefined}
+                icon={k.icon}
+                accent={k.color}
+                trend={
+                  k.label === "Total Revenue"
+                    ? `${metrics.comparedToPreviousPercent >= 0 ? "+" : ""}${metrics.comparedToPreviousPercent}%`
+                    : k.label === "Profit"
+                      ? kpiBadgeText(metrics.profit - metrics.loss, "↑", "↓")
+                      : "Live"
+                }
+                trendUp={
+                  k.label === "Total Revenue"
+                    ? metrics.comparedToPreviousPercent >= 0
+                    : k.label === "Profit"
+                      ? metrics.profit >= metrics.loss
+                      : true
+                }
                 onClick={k.click}
-                className="!p-4 cursor-pointer hover:neon-border transition-all"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div
-                    className="h-10 w-10 rounded-xl flex items-center justify-center"
-                    style={{
-                      background: `color-mix(in oklab, ${k.color} 15%, transparent)`,
-                      border: `1px solid color-mix(in oklab, ${k.color} 35%, transparent)`,
-                    }}
-                  >
-                    {k.icon}
-                  </div>
-                  <div className="text-[10px] uppercase tracking-widest text-muted-foreground whitespace-nowrap">
-                    {k.label === "Profit" || k.label === "Loss / Leakage" ? k.sub : metrics ? k.sub : ""}
-                  </div>
-                </div>
-
-                <div className="mt-3">
-                  <div className="text-3xl font-bold tracking-tight">{k.value}</div>
-                  <div className="text-xs text-muted-foreground mt-0.5">{k.label}</div>
-                </div>
-
-                <div className="mt-3 flex items-center justify-between gap-2">
-                  <Badge variant="outline" className={cn("border-white/10 text-xs", k.label === "Profit" ? "text-emerald-300" : "")}>
-                    {k.label === "Profit" ? kpiBadgeText(metrics.profit - metrics.loss, "Up", "Down") : "Live"}
-                  </Badge>
-                  <Badge variant="outline" className="border-white/10 text-xs">{selectedCountry}</Badge>
-                </div>
-              </GlowCard>
+              />
             ))}
           </div>
 

@@ -9,6 +9,7 @@ import { Plus, Search, SlidersHorizontal, ShieldCheck, X } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { BUDGETS, BUYER_TYPES, PROPERTY_TYPES, SOURCES } from "@/lib/dashboard-data";
+import { isSupabaseConfigured } from "@/lib/supabase-client";
 
 export function LeadsSection() {
   const { leads, setAddLeadOpen, setSelectedLeadId, leadFilters, setLeadFilters } = useDashboard();
@@ -36,6 +37,11 @@ export function LeadsSection() {
   }, [leads, q, sort, leadFilters]);
 
   const activeFilters = Object.entries(leadFilters).filter(([, v]) => v) as [string, string | boolean][];
+  // Debug logs requested
+  console.log("[leads-ui] fetched leads:", leads.length, "first:", leads[0]);
+  console.log("[leads-ui] activeFilters:", activeFilters);
+  console.log("[leads-ui] search query:", q);
+  console.log("[leads-ui] filtered leads count:", filtered.length);
 
   return (
     <div>
@@ -68,7 +74,11 @@ export function LeadsSection() {
       )}
 
       {filtered.length === 0 ? (
-        <GlowCard className="text-center py-16 text-muted-foreground">No leads match your filters.</GlowCard>
+        isSupabaseConfigured() && leads.length === 0 ? (
+          <GlowCard className="text-center py-16 text-muted-foreground">No leads found for this workspace.</GlowCard>
+        ) : (
+          <GlowCard className="text-center py-16 text-muted-foreground">No leads match your filters.</GlowCard>
+        )
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {filtered.map(l => (

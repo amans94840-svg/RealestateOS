@@ -19,6 +19,7 @@ import { getSupabase, isSupabaseConfigured } from "./supabase-client";
 export type ProfileRow = {
   full_name: string | null;
   company_name: string | null;
+  workspace_id?: string | null;
   role: string | null;
 };
 
@@ -119,7 +120,11 @@ export async function upsertUserProfile(
 }
 
 export async function fetchUserProfile(sb: SupabaseClient, userId: string): Promise<ProfileRow | null> {
-  const { data, error } = await sb.from("profiles").select("full_name, company_name, role").eq("id", userId).maybeSingle();
+  const { data, error } = await sb
+    .from("profiles")
+    .select("full_name, company_name, role, workspace_id")
+    .eq("id", userId)
+    .maybeSingle();
   if (error || !data) return null;
   return data as ProfileRow;
 }

@@ -12,7 +12,12 @@ import {
   Settings as SettingsIcon,
   X,
   Edit,
+  RefreshCcw,
+  Globe,
+  Building2,
 } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { COUNTRIES } from "@/lib/dashboard-data";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -49,6 +54,7 @@ export function TopNav() {
   const [search, setSearch] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [workspaceCountry, setWorkspaceCountry] = useState("India");
   const [draft, setDraft] = useState({
     name: user.name,
     role: user.role,
@@ -93,8 +99,18 @@ export function TopNav() {
     setProfileOpen(true);
   };
 
+  const handleRefresh = () => {
+    window.dispatchEvent(new CustomEvent("reos-refresh-dashboard"));
+    toast.success("Refreshing command center…");
+  };
+
   return (
-    <header className="sticky top-0 z-20 h-16 border-b border-border/60 glass-strong flex items-center px-4 md:px-6 gap-3">
+    <header className="sticky top-0 z-20 flex h-16 items-center gap-2 border-b border-border/50 command-shell px-3 md:gap-3 md:px-5">
+      <div className="hidden items-center gap-2 rounded-xl border border-white/10 bg-black/25 px-2.5 py-1.5 text-xs lg:flex">
+        <Building2 className="h-3.5 w-3.5 text-primary" />
+        <span className="font-medium text-foreground">Workspace</span>
+      </div>
+
       <Popover open={searchOpen && !!search.trim()} onOpenChange={setSearchOpen}>
         <PopoverTrigger asChild>
           <div className="relative flex-1 max-w-xl">
@@ -107,7 +123,7 @@ export function TopNav() {
               }}
               onFocus={() => setSearchOpen(true)}
               placeholder="Search leads, properties, brokers, conversations…"
-              className="pl-9 pr-9 bg-input/40 border-border/60 focus-visible:ring-primary/40 h-10"
+              className="h-10 border-white/10 bg-black/30 pl-9 pr-9 focus-visible:ring-primary/40"
             />
             {search && (
               <button
@@ -220,12 +236,32 @@ export function TopNav() {
         </PopoverContent>
       </Popover>
 
+      <Select value={workspaceCountry} onValueChange={setWorkspaceCountry}>
+        <SelectTrigger className="hidden h-9 w-[128px] border-white/10 bg-black/30 text-xs md:flex">
+          <Globe className="mr-1 h-3.5 w-3.5 shrink-0 text-primary" />
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent className="border-white/10 bg-slate-950 text-white">
+          {COUNTRIES.map((c) => (
+            <SelectItem key={c.name} value={c.name}>
+              {c.flag} {c.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
       <Button
-        onClick={() => setAiOpen(true)}
+        type="button"
         variant="outline"
-        className="hidden md:inline-flex border-primary/40 hover:border-primary hover:bg-primary/10 text-foreground"
+        size="sm"
+        className="hidden border-white/10 bg-black/25 sm:inline-flex"
+        onClick={handleRefresh}
       >
-        <Bot className="h-4 w-4 text-primary" />{" "}
+        <RefreshCcw className="h-4 w-4" />
+      </Button>
+
+      <Button onClick={() => setAiOpen(true)} size="sm" className="btn-gradient hidden sm:inline-flex">
+        <Bot className="h-4 w-4" />
         <span className="hidden lg:inline">AI Assistant</span>
       </Button>
 

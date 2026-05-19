@@ -1,4 +1,5 @@
 import { SEED_BROKERS, SEED_APPTS } from "@/lib/dashboard-data";
+import { getSupabase, isSupabaseConfigured } from "./supabase-client";
 
 export type DashboardDurationKey = "today" | "last7d" | "last30d" | "last90d" | "thisYear" | "custom";
 
@@ -360,10 +361,201 @@ function generateMockDashboardMetrics(args: { duration: DashboardDurationKey; co
 }
 
 export async function fetchDashboardMetrics(country: string, duration: DashboardDurationKey, customRange?: CustomRange | null): Promise<DashboardMetrics> {
-  // Placeholder: later connect to Supabase revenue/deals/leads tables.
+  // Backwards-compatible mock fetch kept for callers that don't pass workspaceId.
   await new Promise((r) => setTimeout(r, 350 + Math.random() * 250));
   const resolvedCountry = (country as DashboardCountry) ?? "Other";
   return generateMockDashboardMetrics({ duration, country: resolvedCountry as DashboardCountry, customRange });
+}
+
+// New: fetch metrics for a workspace from Supabase table `public.dashboard_metrics`.
+export async function fetchDashboardMetricsForWorkspace(
+  workspaceId: string | undefined,
+  country: string,
+  duration: DashboardDurationKey,
+  customRange?: CustomRange | null,
+): Promise<DashboardMetrics> {
+  // If Supabase not configured, fallback to mock
+  if (!isSupabaseConfigured()) {
+    return fetchDashboardMetrics(country, duration, customRange);
+  }
+  const sb = getSupabase()!;
+  try {
+    const { data, error } = await sb
+      .from("dashboard_metrics")
+      .select("*")
+      .eq("workspace_id", workspaceId)
+      .eq("country", country)
+      .eq("duration", duration)
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      console.warn("Supabase fetch dashboard_metrics error:", error);
+      return fetchDashboardMetrics(country, duration, customRange);
+    }
+    if (!data) {
+      return fetchDashboardMetrics(country, duration, customRange);
+    }
+
+    // Map DB row to DashboardMetrics shape. Fields may be stored as JSON.
+    const row: any = data;
+    const mapped: DashboardMetrics = {
+      duration,
+      country: (row.country as DashboardCountry) ?? (country as DashboardCountry),
+      totalLeads: row.total_leads ?? row.totalLeads ?? 0,
+      hotLeads: row.hot_leads ?? row.hotLeads ?? 0,
+      newLeadsToday: row.new_leads_today ?? row.newLeadsToday ?? 0,
+      siteVisitsBooked: row.site_visits ?? row.siteVisits ?? 0,
+      closedDeals: row.closed_deals ?? row.closedDeals ?? 0,
+      totalRevenue: row.total_revenue ?? row.totalRevenue ?? 0,
+      profit: row.profit ?? 0,
+      loss: row.loss_leakage ?? row.loss ?? 0,
+      leakage: row.loss_leakage ?? row.leakage ?? 0,
+      pendingPipelineValue: row.pending_pipeline_value ?? row.pendingPipelineValue ?? 0,
+      aiPredictedRevenue: row.ai_predicted_revenue ?? row.aiPredictedRevenue ?? 0,
+      aiConfidencePercent: row.ai_confidence_percent ?? row.aiConfidencePercent ?? 0,
+      conversionRatePercent: row.conversion_rate ?? row.conversionRate ?? 0,
+      averageDealValue: row.avg_deal_value ?? row.averageDealValue ?? 0,
+      revenueTrend: (row.chart_data?.revenueTrend ?? row.revenueTrend) ?? generateMockDashboardMetrics({ duration, country: country as DashboardCountry }).revenueTrend,
+      funnel: (row.funnel_data ?? row.funnel) ?? generateMockDashboardMetrics({ duration, country: country as DashboardCountry }).funnel,
+      profitLoss: (row.profit_loss ?? row.profitLoss) ?? generateMockDashboardMetrics({ duration, country: country as DashboardCountry }).profitLoss,
+      countryRevenue: (row.country_revenue ?? row.countryRevenue) ?? generateMockDashboardMetrics({ duration, country: country as DashboardCountry }).countryRevenue,
+      brokerPerformance: (row.broker_leaderboard ?? row.brokerPerformance) ?? generateMockDashboardMetrics({ duration, country: country as DashboardCountry }).brokerPerformance,
+      topBrokers: (row.top_brokers ?? row.topBrokers) ?? generateMockDashboardMetrics({ duration, country: country as DashboardCountry }).topBrokers,
+      leadsNeedingFollowUp: (row.leads_needing_follow_up ?? row.leadsNeedingFollowUp) ?? generateMockDashboardMetrics({ duration, country: country as DashboardCountry }).leadsNeedingFollowUp,
+      hotOpportunities: (row.hot_opportunities ?? row.hotOpportunities) ?? generateMockDashboardMetrics({ duration, country: country as DashboardCountry }).hotOpportunities,
+      lostRevenueReasons: (row.lost_revenue_reasons ?? row.lostRevenueReasons) ?? generateMockDashboardMetrics({ duration, country: country as DashboardCountry }).lostRevenueReasons,
+      upcomingSiteVisits: (row.upcoming_site_visits ?? row.upcomingSiteVisits) ?? generateMockDashboardMetrics({ duration, country: country as DashboardCountry }).upcomingSiteVisits,
+      aiRecommendedActions: (row.ai_recommended_actions ?? row.aiRecommendedActions) ?? generateMockDashboardMetrics({ duration, country: country as DashboardCountry }).aiRecommendedActions,
+      aiInsights: (row.ai_insights ?? row.aiInsights) ?? generateMockDashboardMetrics({ duration, country: country as DashboardCountry }).aiInsights,
+      comparedToPreviousPercent: row.compared_to_previous_percent ?? row.comparedToPreviousPercent ?? 0,
+    };
+    return mapped;
+  } catch (e) {
+    console.error("fetchDashboardMetricsForWorkspace error", e);
+    return fetchDashboardMetrics(country, duration, customRange);
+  }
+}
+
+// Update dashboard metrics row for a workspace. Upserts into public.dashboard_metrics.
+export async function updateDashboardMetrics(workspaceId: string | undefined, metrics: Partial<DashboardMetrics> & { country: string; duration: DashboardDurationKey }) {
+  if (!isSupabaseConfigured()) {
+    console.warn("Supabase not configured; updateDashboardMetrics is a no-op in mock mode.");
+    return null;
+  }
+  const sb = getSupabase()!;
+  try {
+    const payload: any = {
+      workspace_id: workspaceId,
+      country: metrics.country,
+      duration: metrics.duration,
+      // store numeric fields with snake_case column names expected by DB
+      total_leads: metrics.totalLeads,
+      hot_leads: metrics.hotLeads,
+      new_leads_today: metrics.newLeadsToday,
+      site_visits: metrics.siteVisitsBooked,
+      closed_deals: metrics.closedDeals,
+      total_revenue: metrics.totalRevenue,
+      profit: metrics.profit,
+      loss_leakage: metrics.leakage ?? metrics.loss,
+      pending_pipeline_value: metrics.pendingPipelineValue,
+      ai_predicted_revenue: metrics.aiPredictedRevenue,
+      ai_confidence_percent: metrics.aiConfidencePercent,
+      conversion_rate: metrics.conversionRatePercent,
+      avg_deal_value: metrics.averageDealValue,
+      // store chart & arrays as JSON
+      chart_data: {
+        revenueTrend: metrics.revenueTrend,
+        profitLoss: metrics.profitLoss,
+      },
+      funnel_data: metrics.funnel,
+      broker_leaderboard: metrics.brokerPerformance,
+      ai_insights: metrics.aiInsights,
+      compared_to_previous_percent: metrics.comparedToPreviousPercent,
+      updated_at: new Date().toISOString(),
+    };
+    const { data, error } = await sb.from("dashboard_metrics").upsert(payload, { onConflict: ["workspace_id", "country", "duration"] }).select().maybeSingle();
+    if (error) {
+      throw error;
+    }
+    return data;
+  } catch (e) {
+    console.error("updateDashboardMetrics error", e);
+    throw e;
+  }
+}
+
+// Subscribe to realtime updates for dashboard_metrics for a workspace/country/duration.
+export function subscribeToDashboardMetrics(
+  workspaceId: string | undefined,
+  country: DashboardCountry,
+  duration: DashboardDurationKey,
+  onUpdate: (metrics: DashboardMetrics) => void,
+): () => void {
+  if (!isSupabaseConfigured()) {
+    // fallback to existing mock updater
+    const unsub = subscribeToDashboardUpdates((u) => {
+      if (u.country === country && u.duration === duration) onUpdate(u.metrics);
+    });
+    return unsub;
+  }
+  const sb = getSupabase()!;
+  // Listen to INSERT/UPDATE on public.dashboard_metrics filtered by workspace_id/country/duration
+  const chan = sb.channel(`public:dashboard_metrics:workspace_${workspaceId}:${country}:${duration}`);
+  chan.on(
+    "postgres_changes",
+    { event: "*", schema: "public", table: "dashboard_metrics", filter: `workspace_id=eq.${workspaceId},country=eq.${country},duration=eq.${duration}` },
+    (payload) => {
+      try {
+        const newRow: any = payload.new ?? payload.record ?? payload;
+        const mapped = {
+          duration,
+          country,
+          totalLeads: newRow.total_leads ?? 0,
+          hotLeads: newRow.hot_leads ?? 0,
+          newLeadsToday: newRow.new_leads_today ?? 0,
+          siteVisitsBooked: newRow.site_visits ?? 0,
+          closedDeals: newRow.closed_deals ?? 0,
+          totalRevenue: newRow.total_revenue ?? 0,
+          profit: newRow.profit ?? 0,
+          loss: newRow.loss_leakage ?? 0,
+          leakage: newRow.loss_leakage ?? 0,
+          pendingPipelineValue: newRow.pending_pipeline_value ?? 0,
+          aiPredictedRevenue: newRow.ai_predicted_revenue ?? 0,
+          aiConfidencePercent: newRow.ai_confidence_percent ?? 0,
+          conversionRatePercent: newRow.conversion_rate ?? 0,
+          averageDealValue: newRow.avg_deal_value ?? 0,
+          revenueTrend: (newRow.chart_data?.revenueTrend ?? newRow.revenue_trend) ?? [],
+          funnel: newRow.funnel_data ?? [],
+          profitLoss: newRow.profit_loss ?? [],
+          countryRevenue: newRow.country_revenue ?? [],
+          brokerPerformance: newRow.broker_leaderboard ?? [],
+          topBrokers: newRow.top_brokers ?? [],
+          leadsNeedingFollowUp: newRow.leads_needing_follow_up ?? [],
+          hotOpportunities: newRow.hot_opportunities ?? [],
+          lostRevenueReasons: newRow.lost_revenue_reasons ?? [],
+          upcomingSiteVisits: newRow.upcoming_site_visits ?? [],
+          aiRecommendedActions: newRow.ai_recommended_actions ?? [],
+          aiInsights: newRow.ai_insights ?? [],
+          comparedToPreviousPercent: newRow.compared_to_previous_percent ?? 0,
+        } as DashboardMetrics;
+        onUpdate(mapped);
+      } catch (e) {
+        console.error("realtime dashboard_metrics payload mapping error", e);
+      }
+    },
+  );
+  void chan.subscribe();
+  return () => {
+    void chan.unsubscribe();
+  };
+}
+
+// Refresh helper that fetches latest metrics (from Supabase when configured).
+export async function refreshDashboardData(workspaceId: string | undefined, country: string, duration: DashboardDurationKey, customRange?: CustomRange | null) {
+  if (isSupabaseConfigured()) {
+    return fetchDashboardMetricsForWorkspace(workspaceId, country, duration, customRange);
+  }
+  return fetchDashboardMetrics(country, duration, customRange);
 }
 
 export async function fetchBrokerPerformance(): Promise<BrokerPerformanceRow[]> {

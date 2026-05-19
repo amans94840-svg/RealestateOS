@@ -25,6 +25,8 @@ import {
 } from "@/components/dashboard/sections/AllSections";
 import { Toaster } from "@/components/ui/sonner";
 import { AuthLandingExperience } from "@/components/auth/AuthLandingExperience";
+import { AnimatePresence } from "framer-motion";
+import { PageTransition } from "@/components/dashboard/PageTransition";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -68,22 +70,26 @@ function Shell() {
       <Sidebar />
       <div className="flex-1 min-w-0 flex flex-col">
         <TopNav />
-        <main className="flex-1 p-4 md:p-6 overflow-x-hidden">
-          {active === "dashboard" && <DashboardSection />}
-          {active === "leads" && <LeadsSection />}
-          {active === "ai-conversations" && <AIConversationsSection />}
-          {active === "properties" && <PropertiesSection />}
-          {active === "appointments" && <AppointmentsSection />}
-          {active === "investor" && <InvestorSection />}
-          {active === "heatmaps" && <HeatmapsSection />}
-          {active === "ai-agents" && <AIAgentsSection />}
-          {active === "trust" && <TrustSection />}
-          {active === "revenue" && <RevenueSection />}
-          {active === "brokers" && <BrokersSection />}
-          {active === "reports" && <ReportsSection />}
-          {active === "settings" && <SettingsSection />}
-          {active === "ai-insights" && <AIInsightsSection />}
-          {active === "forecast" && <ForecastSection />}
+        <main className="command-shell flex-1 overflow-x-hidden rounded-tl-2xl p-4 md:p-6">
+          <AnimatePresence mode="wait">
+            <PageTransition key={active}>
+              {active === "dashboard" && <DashboardSection />}
+              {active === "leads" && <LeadsSection />}
+              {active === "ai-conversations" && <AIConversationsSection />}
+              {active === "properties" && <PropertiesSection />}
+              {active === "appointments" && <AppointmentsSection />}
+              {active === "investor" && <InvestorSection />}
+              {active === "heatmaps" && <HeatmapsSection />}
+              {active === "ai-agents" && <AIAgentsSection />}
+              {active === "trust" && <TrustSection />}
+              {active === "revenue" && <RevenueSection />}
+              {active === "brokers" && <BrokersSection />}
+              {active === "reports" && <ReportsSection />}
+              {active === "settings" && <SettingsSection />}
+              {active === "ai-insights" && <AIInsightsSection />}
+              {active === "forecast" && <ForecastSection />}
+            </PageTransition>
+          </AnimatePresence>
         </main>
       </div>
       <AIDrawer />

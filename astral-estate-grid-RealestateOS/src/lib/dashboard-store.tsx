@@ -5,8 +5,9 @@ import {
   SEED_LEADS, SEED_PROPERTIES, SEED_APPTS, SEED_ACTIVITY, SEED_NOTIFICATIONS, SEED_INSIGHTS,
   type Lead, type Property, type Appointment, type Activity, type Notification, type InsightItem,
 } from "./dashboard-data";
-import { getSupabase } from "./supabase-client";
+import { getSupabase, isSupabaseConfigured } from "./supabase-client";
 import { fetchUserProfile } from "./supabase-auth";
+import { fetchLeads, createLead as createLeadRow, updateLeadRow, deleteLeadRow, subscribeToLeads } from "./leads-api";
 
 type SectionKey =
   | "dashboard" | "leads" | "ai-conversations" | "properties" | "appointments"
@@ -38,6 +39,7 @@ type UserProfile = {
   email: string;
   company: string;
   avatar: string;
+  workspaceId?: string | undefined;
   permissions: UserPermission[];
 };
 
@@ -104,6 +106,7 @@ const DEFAULT_USER: UserProfile = {
   email: "aman@realestateos.ai",
   company: "RealEstateOS",
   avatar: "AS",
+  workspaceId: undefined,
   permissions: ["view_dashboard", "manage_leads", "manage_properties", "view_reports", "manage_settings", "manage_team"],
 };
 
@@ -116,7 +119,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [aiOpen, setAiOpen] = useState(false);
   const [addLeadOpen, setAddLeadOpen] = useState(false);
-  const [leads, setLeads] = useState<Lead[]>(SEED_LEADS);
+  const [leads, setLeads] = useState<Lead[]>(isSupabaseConfigured() ? [] : SEED_LEADS);
   const [properties, setProperties] = useState<Property[]>(SEED_PROPERTIES);
   const [appointments, setAppointments] = useState<Appointment[]>(SEED_APPTS);
   const [notifications, setNotifications] = useState<Notification[]>(SEED_NOTIFICATIONS);
@@ -155,14 +158,151 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const addLead = useCallback((l: Lead) => {
-    setLeads(prev => [l, ...prev]);
-    pushActivity(`New global lead added: ${l.name} (${l.country})`, "user-plus", "lead");
-    toast.success("Lead added", { description: `${l.name} • AI score ${l.aiScore}` });
+    // Attempt to create in Supabase, fallback to local state
+    (async () => {
+      try {
+        const sb = getSupabase();
+        let created;
+        if (sb) {
+          const userId = (sb.auth.user?.id) || undefined;
+          created = await createLeadRow(undefined, userId, {
+            name: l.name,
+            phone: l.phone,
+            email: l.email,
+            country: l.country,
+            city: l.city,
+            budget: l.budget,
+            property_type: l.propertyType,
+            buyer_type: l.buyerType,
+            urgency: l.urgency,
+            source: l.source,
+            verified: l.verified,
+            ai_score: l.aiScore,
+            recommended_action: l.recommendedAction,
+          });
+        }
+        const toInsert: Lead = {
+          ...l,
+          id: created?.id ?? l.id ?? `lead_${Date.now()}`,
+          createdAt: created?.created_at ? Date.parse(created.created_at) : Date.now(),
+        };
+        setLeads((prev) => [toInsert, ...prev]);
+        pushActivity(`New global lead added: ${toInsert.name} (${toInsert.country})`, "user-plus", "lead");
+        toast.success("Lead added", { description: `${toInsert.name} • AI score ${toInsert.aiScore}` });
+      } catch (e) {
+        console.error("addLead error", e);
+        // still add locally
+        setLeads(prev => [l, ...prev]);
+        pushActivity(`New local lead added: ${l.name}`, "user-plus", "lead");
+        toast.error("Failed to persist lead to server; saved locally");
+      }
+    })();
   }, [pushActivity]);
 
   const updateLead = useCallback((id: string, patch: Partial<Lead>) => {
-    setLeads(prev => prev.map(l => l.id === id ? { ...l, ...patch } : l));
+    (async () => {
+      try {
+        const sb = getSupabase();
+        if (sb) {
+          await updateLeadRow(id, {
+            name: patch.name,
+            phone: patch.phone,
+            email: patch.email,
+            city: patch.city,
+            country: patch.country,
+            budget: patch.budget,
+            property_type: patch.propertyType,
+            buyer_type: patch.buyerType,
+            urgency: patch.urgency,
+            source: patch.source,
+            verified: patch.verified,
+            ai_score: patch.aiScore,
+            recommended_action: patch.recommendedAction,
+          });
+        }
+        setLeads(prev => prev.map(l => l.id === id ? { ...l, ...patch } : l));
+      } catch (e) {
+        console.error("updateLead error", e);
+        setLeads(prev => prev.map(l => l.id === id ? { ...l, ...patch } : l));
+        toast.error("Failed to persist lead update");
+      }
+    })();
   }, []);
+
+  // Helper: map Supabase lead row to UI Lead type (handles multiple column name variants)
+  function mapLeadRow(r: any): Lead {
+    return {
+      id: r.id ?? r.lead_id ?? `lead_${Date.now()}`,
+      name: (r.full_name ?? r.name ?? r.display_name ?? "") as string,
+      phone: (r.full_phone_number ?? r.phone ?? r.phoneNumber ?? "") as string,
+      email: (r.email ?? "") as string,
+      country: (r.country ?? "") as string,
+      city: (r.city ?? "") as string,
+      budget: (r.budget ?? r.budget_range ?? "") as string,
+      propertyType: (r.property_type ?? r.propertyType ?? "") as string,
+      buyerType: (r.buyer_type ?? r.buyerType ?? "") as string,
+      urgency: (r.urgency ?? "Medium") as string,
+      source: (r.lead_source ?? r.source ?? "") as string,
+      verified: Boolean(r.verified ?? r.is_verified),
+      aiScore: typeof r.ai_score === "number" ? r.ai_score : typeof r.aiScore === "number" ? r.aiScore : Math.round(Math.random() * 100),
+      recommendedAction: (r.recommended_action ?? r.recommendedAction ?? "") as string,
+      createdAt: r.created_at ? Date.parse(r.created_at) : Date.now(),
+    };
+  }
+
+  // Ensure leads are fetched when workspaceId or user changes
+  useEffect(() => {
+    let mounted = true;
+    const sb = getSupabase();
+    if (!isSupabaseConfigured() || !sb) return;
+    const workspaceId = user.workspaceId ?? undefined;
+    const userId = (() => {
+      try {
+        // try reading session user id via supabase client
+        // @ts-ignore
+        return sb.auth.getUser ? (sb.auth.getUser() as any)?.data?.user?.id : undefined;
+      } catch {
+        return undefined;
+      }
+    })();
+    if (!workspaceId) {
+      console.log("[leads] workspaceId missing - show loading/empty state");
+      return;
+    }
+    (async () => {
+      try {
+        console.log("[leads] fetching for workspaceId:", workspaceId, "userId:", userId);
+        const fetched = await fetchLeads(workspaceId, userId);
+        if (!mounted) return;
+        console.log("[leads] fetched rows:", fetched.length);
+        const mapped = fetched.map(mapLeadRow);
+        setLeads(mapped);
+      } catch (e) {
+        console.error("[leads] fetch failed", e);
+        toast.error("Failed to load leads from server");
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [user.workspaceId]);
+
+  const deleteLead = useCallback((id: string) => {
+    (async () => {
+      try {
+        const sb = getSupabase();
+        if (sb) {
+          await deleteLeadRow(id);
+        }
+        setLeads(prev => prev.filter(l => l.id !== id));
+        pushActivity(`Lead deleted: ${id}`, "trash", "lead");
+        toast.success("Lead deleted");
+      } catch (e) {
+        console.error("deleteLead error", e);
+        toast.error("Failed to delete lead");
+      }
+    })();
+  }, [pushActivity]);
 
   const toggleFavorite = useCallback((id: string) => {
     setProperties(prev => prev.map(p => p.id === id ? { ...p, favorite: !p.favorite } : p));
@@ -218,6 +358,9 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     }
 
     const applyFromSupabaseUser = async (sessionUser: User, silent: boolean) => {
+    // #region agent log
+    fetch('http://127.0.0.1:7615/ingest/fd1a74b4-c397-45f6-9718-7b61c882f570',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'06225e'},body:JSON.stringify({sessionId:'06225e',location:'src/lib/dashboard-store.tsx:applyFromSupabaseUser',message:'applyFromSupabaseUser start',data:{userId:sessionUser?.id},timestamp:Date.now(),hypothesisId:'H2',runId:'pre-fix'})}).catch(()=>{});
+    // #endregion
       const profile = await fetchUserProfile(sb, sessionUser.id);
       const meta = sessionUser.user_metadata as Record<string, string | undefined>;
       const name = profile?.full_name || meta?.full_name || sessionUser.email?.split("@")[0] || "User";
@@ -227,8 +370,24 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         name,
         role: profile?.role || meta?.role || "Agent",
         company: profile?.company_name || meta?.company || "",
+        workspaceId: profile?.workspace_id ?? (meta?.workspace_id as string | undefined) ?? undefined,
         avatar: initials(name),
       };
+      // If workspaceId missing, attempt to discover via workspace_members table
+      try {
+        if (!nextUser.workspaceId) {
+          const { data: wmRow, error: wmErr } = await sb.from("workspace_members").select("workspace_id").eq("user_id", sessionUser.id).maybeSingle();
+          if (wmErr) {
+            console.warn("workspace_members lookup error", wmErr);
+          } else if (wmRow?.workspace_id) {
+            nextUser.workspaceId = wmRow.workspace_id;
+            // Log discovery
+            console.log("[workspace] discovered via workspace_members:", nextUser.workspaceId);
+          }
+        }
+      } catch (e) {
+        console.warn("workspace_members lookup failed", e);
+      }
       setUser(nextUser);
       setIsAuthenticated(true);
       persistUser(nextUser);
@@ -237,7 +396,62 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         pushActivity(`User signed in: ${nextUser.name}`, "user-check", "auth");
         toast.success("Logged in", { description: `Welcome, ${nextUser.name}` });
       }
+      // Fetch leads for workspace when user signs in
+      try {
+        const workspaceId = nextUser.workspaceId ?? (nextUser.company && /^[0-9a-fA-F-]{36}$/.test(nextUser.company) ? nextUser.company : undefined);
+        console.log("[leads] userId:", sessionUser.id, "profile.workspace_id:", profile?.workspace_id, "resolvedWorkspaceId:", workspaceId);
+        const fetchedLeads = await fetchLeads(workspaceId, sessionUser.id);
+        console.log("[leads] fetched count:", (fetchedLeads || []).length);
+        // #region agent log
+        fetch('http://127.0.0.1:7615/ingest/fd1a74b4-c397-45f6-9718-7b61c882f570',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'06225e'},body:JSON.stringify({sessionId:'06225e',location:'src/lib/dashboard-store.tsx:applyFromSupabaseUser',message:'fetchedLeads',data:{count:(fetchedLeads||[]).length},timestamp:Date.now(),hypothesisId:'H3',runId:'pre-fix'})}).catch(()=>{});
+        // #endregion
+        if (fetchedLeads && fetchedLeads.length) {
+          // Map to Lead type used in store
+          setLeads(
+            fetchedLeads.map((r) => ({
+              id: r.id,
+              name: r.name,
+              phone: r.phone ?? "",
+              email: r.email ?? "",
+              country: r.country ?? "",
+              city: r.city ?? "",
+              budget: r.budget ?? "",
+              propertyType: (r.property_type as string) ?? "",
+              buyerType: (r.buyer_type as string) ?? "",
+              urgency: (r.urgency as string) ?? "Medium",
+              source: r.source ?? "",
+              verified: Boolean(r.verified),
+              aiScore: typeof r.ai_score === "number" ? r.ai_score : Math.round(Math.random() * 100),
+              recommendedAction: r.recommended_action ?? "",
+              createdAt: r.created_at ? Date.parse(r.created_at) : Date.now(),
+            })),
+          );
+        }
+      } catch (e) {
+        console.warn("fetchLeads on sign in failed", e);
+      }
     };
+
+    // Try to load current session user immediately (handles cases where onAuthStateChange doesn't emit)
+    (async () => {
+      try {
+        // #region agent log
+        fetch('http://127.0.0.1:7615/ingest/fd1a74b4-c397-45f6-9718-7b61c882f570',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'06225e'},body:JSON.stringify({sessionId:'06225e',location:'src/lib/dashboard-store.tsx:getUser',message:'attempting getUser',data:{},timestamp:Date.now(),hypothesisId:'H5',runId:'pre-fix'})}).catch(()=>{});
+        // #endregion
+        // @ts-ignore - supabase client typing may vary
+        const gm = await sb.auth.getUser();
+        // gm may be { data: { user } }
+        const sessionUser = gm?.data?.user ?? gm?.user ?? null;
+        // #region agent log
+        fetch('http://127.0.0.1:7615/ingest/fd1a74b4-c397-45f6-9718-7b61c882f570',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'06225e'},body:JSON.stringify({sessionId:'06225e',location:'src/lib/dashboard-store.tsx:getUser',message:'getUser result',data:{hasUser:!!sessionUser, userId:sessionUser?.id},timestamp:Date.now(),hypothesisId:'H6',runId:'pre-fix'})}).catch(()=>{});
+        // #endregion
+        if (sessionUser) {
+          await applyFromSupabaseUser(sessionUser as User, true);
+        }
+      } catch (e) {
+        console.warn("sb.auth.getUser failed", e);
+      }
+    })();
 
     const { data } = sb.auth.onAuthStateChange((event, session) => {
       void (async () => {
@@ -272,6 +486,49 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       data.subscription.unsubscribe();
     };
   }, [loadLocalAuth, persistAuth, persistUser, pushActivity]);
+
+  // Realtime subscription for leads when Supabase is available and user authenticated.
+  useEffect(() => {
+    const sb = getSupabase();
+    if (!sb || !isSupabaseConfigured()) return;
+    let unsub: (() => void) | null = null;
+    (async () => {
+      try {
+        const workspaceId = user.workspaceId ?? undefined;
+        unsub = subscribeToLeads(workspaceId, (payload) => {
+          // #region agent log
+          fetch('http://127.0.0.1:7615/ingest/fd1a74b4-c397-45f6-9718-7b61c882f570',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'06225e'},body:JSON.stringify({sessionId:'06225e',location:'src/lib/dashboard-store.tsx:subscribeToLeads.callback',message:'realtime lead payload',data:{event:payload.event, id:payload.new?.id ?? payload.old?.id},timestamp:Date.now(),hypothesisId:'H4',runId:'pre-fix'})}).catch(()=>{});
+          // #endregion
+          if (payload.event === "INSERT" && payload.new) {
+            setLeads((prev) => [{ 
+              id: payload.new!.id,
+              name: payload.new!.name,
+              phone: payload.new!.phone ?? "",
+              email: payload.new!.email ?? "",
+              country: payload.new!.country ?? "",
+              city: payload.new!.city ?? "",
+              budget: payload.new!.budget ?? "",
+              propertyType: (payload.new!.property_type as string) ?? "",
+              buyerType: (payload.new!.buyer_type as string) ?? "",
+              urgency: (payload.new!.urgency as string) ?? "Medium",
+              source: payload.new!.source ?? "",
+              verified: Boolean(payload.new!.verified),
+              aiScore: typeof payload.new!.ai_score === "number" ? payload.new!.ai_score : Math.round(Math.random() * 100),
+              recommendedAction: payload.new!.recommended_action ?? "",
+              createdAt: payload.new!.created_at ? Date.parse(payload.new!.created_at) : Date.now(),
+            }, ...prev]);
+          } else if ((payload.event === "UPDATE" || payload.event === "REPLACE") && payload.new) {
+            setLeads((prev) => prev.map(l => l.id === payload.new!.id ? { ...l, name: payload.new!.name ?? l.name, phone: payload.new!.phone ?? l.phone, email: payload.new!.email ?? l.email, country: payload.new!.country ?? l.country, city: payload.new!.city ?? l.city, budget: payload.new!.budget ?? l.budget, propertyType: (payload.new!.property_type as string) ?? l.propertyType, buyerType: (payload.new!.buyer_type as string) ?? l.buyerType, urgency: (payload.new!.urgency as string) ?? l.urgency, source: payload.new!.source ?? l.source, verified: Boolean(payload.new!.verified), aiScore: typeof payload.new!.ai_score === "number" ? payload.new!.ai_score : l.aiScore, recommendedAction: payload.new!.recommended_action ?? l.recommendedAction } : l));
+          } else if (payload.event === "DELETE" && payload.old) {
+            setLeads((prev) => prev.filter(l => l.id !== payload.old!.id));
+          }
+        });
+      } catch (e) {
+        console.warn("subscribeToLeads failed", e);
+      }
+    })();
+    return () => { if (unsub) unsub(); };
+  }, [user.company]);
 
   const login = useCallback(
     (

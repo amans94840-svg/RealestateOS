@@ -850,7 +850,7 @@ export function PropertiesSection() {
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {properties.map((property) => (
-          <Card key={property.id} className="border-white/10 bg-white/5">
+          <Card key={property.id} className="overflow-hidden transition-shadow hover:command-card-active">
             <CardHeader>
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -861,8 +861,8 @@ export function PropertiesSection() {
               </div>
             </CardHeader>
             <CardContent className="space-y-3">
-              <div className="aspect-[16/10] overflow-hidden rounded-xl bg-white/5">
-                <img src={property.imageUrl || "https://images.unsplash.com/photo-1560518883-ce09059eeffa?auto=format&fit=crop&w=1200&q=80"} alt={property.title} className="h-full w-full object-cover" />
+              <div className="aspect-[16/9] overflow-hidden rounded-xl bg-white/5 ring-1 ring-white/10">
+                <img src={property.imageUrl || FALLBACK_PROPERTY_IMAGE} alt={property.title} className="h-full w-full object-cover transition-transform duration-300 hover:scale-[1.03]" />
               </div>
               <div className="flex flex-wrap gap-2 text-xs">
                 <Badge variant="outline">{property.listingType}</Badge>
