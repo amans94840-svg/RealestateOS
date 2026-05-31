@@ -111,7 +111,7 @@ export type Appointment = {
   duration?: string;
   meetingLocation?: string;
   notes?: string;
-  status: "Confirmed" | "Pending" | "Cancelled" | "Rescheduled";
+  status: "Confirmed" | "Pending" | "Cancelled" | "Rescheduled" | "Completed";
   assignedBroker?: string;
   broker?: string;
   createdAt?: number;

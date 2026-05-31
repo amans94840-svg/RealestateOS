@@ -1,4 +1,5 @@
 import { getSupabase, isSupabaseConfigured } from "./supabase-client";
+import * as leadsService from "@/services/leadsService";
 
 export type LeadRow = {
   id: string;
@@ -30,17 +31,10 @@ export async function fetchLeads(workspaceId?: string, ownerId?: string): Promis
     return [];
   }
   const sb = getSupabase()!;
-  const q = sb.from("leads").select("*").eq("workspace_id", workspaceId);
-  if (ownerId) q.eq("owner_id", ownerId);
-  const { data, error } = await q.order("created_at", { ascending: false });
-  if (error) {
-    console.error("[leads] fetch error:", error);
-    // console debug for developer
-    console.error(error);
-    return [];
-  }
+  // Delegate to leadsService which centralizes Supabase access and realtime
+  const data = await leadsService.fetchLeads(workspaceId);
   console.log("[leads-api] fetched", (data ?? []).length, "rows for workspace", workspaceId);
-  return (data ?? []) as LeadRow[];
+  return data;
 }
 
 export async function createLead(workspaceId: string | undefined, ownerId: string | undefined, lead: Partial<LeadRow>) {

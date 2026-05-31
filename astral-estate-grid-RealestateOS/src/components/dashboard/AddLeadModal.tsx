@@ -18,7 +18,9 @@ import {
   getNationalDigits,
   getPhonePlaceholder,
   getPhoneMaxNationalLength,
-  formatPhoneE164,
+  buildFullPhoneNumber,
+  formatPhoneNumber,
+  getPhoneValidationError,
   isValidPhoneNumberForCountry,
   sanitizeNationalPhoneInput,
 } from "@/lib/lead-phone-otp";
@@ -42,6 +44,14 @@ export function AddLeadModal() {
   const [phone, setPhone] = useState("");
   const nationalDigits = useMemo(() => getNationalDigits(phone), [phone]);
   const phoneValid = useMemo(() => isValidPhoneNumberForCountry(country.code, nationalDigits), [country.code, nationalDigits]);
+  const phoneError = useMemo(
+    () => (nationalDigits.length > 0 ? getPhoneValidationError(country.code, nationalDigits) : null),
+    [country.code, nationalDigits],
+  );
+  const formattedPhonePreview = useMemo(
+    () => formatPhoneNumber(country.code, nationalDigits),
+    [country.code, nationalDigits],
+  );
 
   const phonePlaceholder = useMemo(() => getPhonePlaceholder(country.code), [country.code]);
   const phoneMaxLen = useMemo(() => getPhoneMaxNationalLength(country.code), [country.code]);
@@ -247,7 +257,7 @@ export function AddLeadModal() {
       toast.error("Please fill all required fields");
       return;
     }
-    const fullPhone = formatPhoneE164(country.code, phone);
+    const fullPhone = buildFullPhoneNumber(country.code, nationalDigits);
     const partial: Partial<Lead> = {
       budget: form.budget,
       buyerType: form.buyerType,
@@ -261,7 +271,7 @@ export function AddLeadModal() {
     addLead({
       id: Math.random().toString(36).slice(2, 10),
       name: form.name,
-      phone: fullPhone,
+      phone: nationalDigits,
       countryCode: country.code,
       email: form.email,
       budget: form.budget,
@@ -414,6 +424,10 @@ export function AddLeadModal() {
                 />
               </div>
             </div>
+            {phoneError ? <p className="text-xs text-rose-400">{phoneError}</p> : null}
+            {formattedPhonePreview && phoneValid ? (
+              <p className="text-xs text-muted-foreground">Will save as: {formattedPhonePreview}</p>
+            ) : null}
 
             <div className="flex flex-wrap gap-2 items-center">
               <Button type="button" variant="ghost" size="sm" onClick={handleChangeNumber} className="text-muted-foreground">

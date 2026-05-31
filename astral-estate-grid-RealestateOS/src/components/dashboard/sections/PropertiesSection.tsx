@@ -1,24 +1,42 @@
-import { useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { CalendarCheck2, Copy, Edit, Heart, Mail, Maximize2, Share2, Download, Users } from "lucide-react";
+import { CalendarCheck2, Copy, Edit, Heart, Mail, Maximize2, Share2, Download, Users, Trash2 } from "lucide-react";
 import { useDashboard } from "@/lib/dashboard-store";
 import { type Property } from "@/lib/dashboard-data";
+import { getSupabase, isSupabaseConfigured } from "@/lib/supabase-client";
 import {
   createPropertyAppointment,
   fetchPropertyDetails,
   saveFavoriteProperty,
   shareProperty,
-  updateProperty as updatePropertyRecord,
 } from "@/lib/property-api";
+import {
+  createProperty as createPropertyRow,
+  deleteProperty as deletePropertyRow,
+  fetchPropertiesWithMeta,
+  subscribeToPropertyUpdates,
+  updateProperty as updatePropertyRow,
+} from "@/services/propertiesService";
+import type { PropertyRow } from "@/types/property";
 import {
   AMENITY_OPTIONS,
   APPRECIATION_OPTIONS,
@@ -120,6 +138,154 @@ function joinLines(value: string[] | undefined) {
   return (value || []).join("\n");
 }
 
+function toNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  return undefined;
+}
+
+function toStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((item) => String(item)).filter(Boolean);
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (Array.isArray(parsed)) return parsed.map((item) => String(item)).filter(Boolean);
+    } catch {
+      return splitLines(value);
+    }
+  }
+  return [];
+}
+
+function mapPropertyRow(row: PropertyRow): Property {
+  const country = row.country || "Other";
+  const imageUrl = row.image_url || "";
+  const roiScore = toNumber(row.roi_score ?? row.roi) ?? 0;
+  return {
+    id: row.id,
+    title: row.title || "Untitled property",
+    country,
+    city: row.city || "",
+    area: row.area || "",
+    address: row.address || "",
+    price: row.price || "",
+    currency: row.currency || getCurrencyByCountry(country),
+    priceRange: row.price_range || "",
+    priceUnit: row.price_unit || "",
+    pricePerUnit: row.price_per_unit || "",
+    bookingAmount: row.booking_amount || "",
+    maintenanceCharges: row.maintenance_charges || "",
+    paymentPlan: row.payment_plan || "",
+    propertyType: row.property_type || "",
+    listingType: row.listing_type || "",
+    status: row.status || "Available",
+    bedrooms: typeof row.bedrooms === "number" ? row.bedrooms : toNumber(row.bedrooms),
+    bathrooms: typeof row.bathrooms === "number" ? row.bathrooms : toNumber(row.bathrooms),
+    balconies: row.balconies || "",
+    size: row.size || "",
+    areaUnit: row.area_unit || "",
+    floor: row.floor || "",
+    totalFloors: row.total_floors || "",
+    furnishing: row.furnishing || "",
+    parking: row.parking || "",
+    facing: row.facing || "",
+    possessionStatus: row.possession_status || "",
+    description: row.description || "",
+    imageUrl,
+    galleryImages: toStringArray(row.gallery_images),
+    nearbyPlaces: toStringArray(row.nearby_places),
+    locationAdvantages: toStringArray(row.location_advantages),
+    ownershipType: row.ownership_type || "",
+    reraStatus: row.rera_status || "",
+    verificationStatus: row.verification_status || "",
+    visibility: row.visibility || "",
+    priority: row.priority || "",
+    tags: toStringArray(row.tags),
+    amenities: toStringArray(row.amenities),
+    aiSummary: row.ai_summary || "",
+    aiInvestmentNote: row.ai_investment_note || "",
+    bestBuyerType: row.best_buyer_type || row.investor_fit || "",
+    rentalYield: toNumber(row.rental_yield),
+    appreciationForecast: toNumber(row.appreciation_forecast),
+    investorFit: row.investor_fit || "",
+    riskLevel: row.risk_level || "",
+    roiScore,
+    trustScore: toNumber(row.trust_score) ?? 0,
+    developerName: row.developer_name || "",
+    assignedBroker: row.assigned_broker || "",
+    isFeatured: Boolean(row.is_featured),
+    isHotDeal: Boolean(row.is_hot_deal),
+    isGlobalProperty: Boolean(row.is_global_property),
+    verified: Boolean(row.verified),
+    roi: roiScore,
+    image: imageUrl || "🏠",
+    createdAt: row.created_at ? Date.parse(row.created_at) : undefined,
+    updatedAt: row.updated_at ? Date.parse(row.updated_at) : undefined,
+  };
+}
+
+function formToPropertyPatch(form: PropertyFormData, aiSummary: string): Partial<PropertyRow> {
+  return {
+    title: form.title.trim(),
+    country: form.country,
+    city: form.city.trim(),
+    area: form.area.trim(),
+    address: form.address.trim(),
+    price: form.exactPrice || form.priceRange,
+    currency: getCurrencyByCountry(form.country),
+    price_range: form.priceRange,
+    price_unit: form.priceUnit,
+    price_per_unit: form.pricePerUnit,
+    booking_amount: form.bookingAmount,
+    maintenance_charges: form.maintenanceCharges,
+    payment_plan: form.paymentPlan,
+    property_type: form.propertyType,
+    listing_type: form.listingType,
+    status: form.listingStatus,
+    bedrooms: form.bedrooms,
+    bathrooms: form.bathrooms,
+    balconies: form.balconies,
+    size: form.areaSize,
+    area_unit: form.areaUnit,
+    floor: form.floor,
+    total_floors: form.totalFloors,
+    furnishing: form.furnishing,
+    parking: form.parking,
+    facing: form.facing,
+    possession_status: form.possessionStatus,
+    description: form.description,
+    image_url: form.coverImageUrl,
+    gallery_images: splitLines(form.galleryImageUrls),
+    ownership_type: form.ownershipType,
+    rera_status: form.reraStatus,
+    verification_status: form.verificationStatus,
+    visibility: form.visibility,
+    priority: form.priority,
+    tags: form.tags,
+    amenities: form.amenities,
+    nearby_places: form.nearbyPlaces,
+    ai_summary: aiSummary,
+    ai_investment_note: form.aiInvestmentNote,
+    best_buyer_type: form.investorFit,
+    rental_yield: form.rentalYield ? Number(form.rentalYield) : undefined,
+    appreciation_forecast: form.appreciationForecast,
+    investor_fit: form.investorFit,
+    risk_level: form.riskLevel,
+    roi_score: form.roiScore,
+    trust_score: form.trustScore,
+    developer_name: form.developerName,
+    assigned_broker: form.assignedBroker,
+    is_featured: form.isFeatured,
+    is_hot_deal: form.isHotDeal,
+    is_global_property: form.isGlobalProperty,
+    verified: form.verificationStatus === "Verified",
+    roi: form.roiScore,
+  };
+}
+
 function toPropertyForm(property?: Property | null): PropertyFormData {
   const base = createDefaultPropertyForm();
   if (!property) return base;
@@ -172,6 +338,7 @@ function toPropertyForm(property?: Property | null): PropertyFormData {
     roiScore: property.roiScore ?? base.roiScore,
     developerName: property.developerName ?? base.developerName,
     assignedBroker: property.assignedBroker ?? base.assignedBroker,
+    nearbyPlaces: property.nearbyPlaces ?? base.nearbyPlaces,
   };
 }
 
@@ -248,19 +415,26 @@ function PropertySelect({
 }
 
 export function PropertiesSection() {
-  const { properties, leads, toggleFavorite, addAppointment, addProperty, updateProperty } = useDashboard();
+  const { leads, toggleFavorite, addAppointment } = useDashboard();
+  const [properties, setProperties] = useState<Property[]>([]);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [matchOpen, setMatchOpen] = useState(false);
   const [zoomImage, setZoomImage] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [addForm, setAddForm] = useState<PropertyFormData>(() => createDefaultPropertyForm());
   const [editForm, setEditForm] = useState<PropertyFormData>(() => createDefaultPropertyForm());
   const [addErrors, setAddErrors] = useState<Record<string, string>>({});
   const [editErrors, setEditErrors] = useState<Record<string, string>>({});
 
   const activeProperty = useMemo(() => properties.find((item) => item.id === activeId) ?? null, [activeId, properties]);
+  const propertyToDelete = useMemo(() => properties.find((item) => item.id === deleteId) ?? null, [deleteId, properties]);
   const activeCountry = addForm.country || editForm.country;
   const currencyCode = getCurrencyByCountry(activeCountry);
   const coverPreview = addForm.coverImageUrl || editForm.coverImageUrl;
@@ -269,12 +443,94 @@ export function PropertiesSection() {
     if (!activeProperty) return [];
     return leads.filter((lead) => {
       const countryMatch = lead.country === activeProperty.country;
+      const cityMatch = Boolean(activeProperty.city && lead.city?.toLowerCase().includes(activeProperty.city.toLowerCase()));
+      const priceMatch = Boolean(activeProperty.priceRange && lead.budget === activeProperty.priceRange);
       const typeMatch =
         lead.propertyType.toLowerCase().includes((activeProperty.propertyType || "").toLowerCase()) ||
         (activeProperty.propertyType || "").toLowerCase().includes(lead.propertyType.toLowerCase());
-      return countryMatch || typeMatch;
+      return countryMatch || cityMatch || priceMatch || typeMatch;
     });
   }, [activeProperty, leads]);
+
+  const loadProperties = useCallback(async (nextWorkspaceId: string) => {
+    setLoading(true);
+    const result = await fetchPropertiesWithMeta(nextWorkspaceId);
+    setProperties(result.data.map(mapPropertyRow));
+    setError(result.error);
+    setLoading(false);
+  }, []);
+
+  const resolveWorkspaceAndLoad = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    setProperties([]);
+
+    if (!isSupabaseConfigured()) {
+      setError("Supabase is not configured");
+      setLoading(false);
+      return;
+    }
+
+    const sb = getSupabase();
+    if (!sb) {
+      setError("Supabase client unavailable");
+      setLoading(false);
+      return;
+    }
+
+    const { data: authData, error: authError } = await sb.auth.getUser();
+    const userId = authData?.user?.id;
+    if (authError || !userId) {
+      setError(authError?.message ?? "No authenticated user session");
+      setLoading(false);
+      return;
+    }
+
+    const { data: profile, error: profileError } = await sb
+      .from("profiles")
+      .select("*")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (profileError) {
+      setError(profileError.message);
+      setLoading(false);
+      return;
+    }
+
+    const nextWorkspaceId = (profile as { workspace_id?: string | null } | null)?.workspace_id ?? null;
+    setWorkspaceId(nextWorkspaceId);
+
+    if (!nextWorkspaceId) {
+      setError("workspace_id not found on profile");
+      setLoading(false);
+      return;
+    }
+
+    await loadProperties(nextWorkspaceId);
+  }, [loadProperties]);
+
+  useEffect(() => {
+    void resolveWorkspaceAndLoad();
+  }, [resolveWorkspaceAndLoad]);
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    return subscribeToPropertyUpdates(workspaceId, (payload) => {
+      const event = payload as { eventType?: string; new?: PropertyRow; old?: PropertyRow };
+      if (event.eventType === "DELETE" && event.old?.id) {
+        setProperties((prev) => prev.filter((item) => item.id !== event.old!.id));
+        if (activeId === event.old.id) setActiveId(null);
+        return;
+      }
+      if (!event.new?.id) return;
+      const mapped = mapPropertyRow(event.new);
+      setProperties((prev) => {
+        const exists = prev.some((item) => item.id === mapped.id);
+        return exists ? prev.map((item) => (item.id === mapped.id ? mapped : item)) : [mapped, ...prev];
+      });
+    });
+  }, [workspaceId, activeId]);
 
   function resetAddForm() {
     setAddForm(createDefaultPropertyForm());
@@ -338,8 +594,14 @@ export function PropertiesSection() {
       property.title,
       getPropertyPriceLabel(property),
       `${property.city}, ${property.country}`,
+      property.propertyType ? `Type: ${property.propertyType}` : null,
+      property.status ? `Status: ${property.status}` : null,
+      property.roiScore != null ? `ROI Score: ${property.roiScore}/100` : null,
+      property.riskLevel ? `Risk: ${property.riskLevel}` : null,
+      property.possessionStatus ? `Possession: ${property.possessionStatus}` : null,
+      property.paymentPlan ? `Payment: ${property.paymentPlan}` : null,
       link,
-    ].join(" • ");
+    ].filter(Boolean).join(" • ");
 
     if (channel === "copy") {
       await handleCopyLink(property);
@@ -374,83 +636,35 @@ export function PropertiesSection() {
     toast.info("PDF export coming soon");
   }
 
-  function submitAdd() {
+  async function submitAdd() {
     const validation = validatePropertyForm(addForm);
     setAddErrors(validation.errors);
     if (!validation.valid) {
       toast.error("Please complete the required property details");
       return;
     }
+    if (!workspaceId) {
+      toast.error("Workspace not ready");
+      return;
+    }
 
     const aiSummary = addForm.aiSummary.trim() || generateMockAiSummary(addForm);
-    const nextProperty = {
-      id: `prop-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      title: addForm.title.trim(),
-      country: addForm.country,
-      city: addForm.city.trim(),
-      area: addForm.area.trim(),
-      address: addForm.address.trim(),
-      price: addForm.exactPrice || addForm.priceRange,
-      currency: currencyCode,
-      priceRange: addForm.priceRange,
-      priceUnit: addForm.priceUnit,
-      pricePerUnit: addForm.pricePerUnit,
-      bookingAmount: addForm.bookingAmount,
-      maintenanceCharges: addForm.maintenanceCharges,
-      paymentPlan: addForm.paymentPlan,
-      propertyType: addForm.propertyType,
-      listingType: addForm.listingType,
-      status: addForm.listingStatus,
-      bedrooms: addForm.bedrooms,
-      bathrooms: addForm.bathrooms,
-      balconies: addForm.balconies,
-      size: addForm.areaSize,
-      areaUnit: addForm.areaUnit,
-      floor: addForm.floor,
-      totalFloors: addForm.totalFloors,
-      furnishing: addForm.furnishing,
-      parking: addForm.parking,
-      facing: addForm.facing,
-      possessionStatus: addForm.possessionStatus,
-      description: addForm.description,
-      imageUrl: addForm.coverImageUrl,
-      galleryImages: splitLines(addForm.galleryImageUrls),
-      ownershipType: addForm.ownershipType,
-      reraStatus: addForm.reraStatus,
-      verificationStatus: addForm.verificationStatus,
-      visibility: addForm.visibility,
-      priority: addForm.priority,
-      tags: addForm.tags,
-      amenities: addForm.amenities,
-      aiSummary,
-      aiInvestmentNote: addForm.aiInvestmentNote,
-      bestBuyerType: addForm.investorFit,
-      rentalYield: addForm.rentalYield ? Number(addForm.rentalYield) : undefined,
-      appreciationForecast: addForm.appreciationForecast,
-      investorFit: addForm.investorFit,
-      riskLevel: addForm.riskLevel,
-      roiScore: addForm.roiScore,
-      trustScore: addForm.trustScore,
-      developerName: addForm.developerName,
-      assignedBroker: addForm.assignedBroker,
-      isFeatured: addForm.isFeatured,
-      isHotDeal: addForm.isHotDeal,
-      isGlobalProperty: addForm.isGlobalProperty,
-      verified: addForm.verificationStatus === "Verified",
-      roi: addForm.roiScore,
-      image: addForm.coverImageUrl || "🏠",
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-
-    addProperty(nextProperty);
-    void updatePropertyRecord(nextProperty.id, { createdAt: nextProperty.createdAt, updatedAt: nextProperty.updatedAt });
-    toast.success("Property added successfully");
-    setAddOpen(false);
-    resetAddForm();
+    setSaving(true);
+    try {
+      const created = await createPropertyRow(workspaceId, formToPropertyPatch(addForm, aiSummary));
+      if (created) setProperties((prev) => [mapPropertyRow(created), ...prev]);
+      toast.success("Property added successfully");
+      setAddOpen(false);
+      resetAddForm();
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to add property");
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function submitEdit() {
+  async function submitEdit() {
     if (!activeProperty) return;
     const validation = validatePropertyForm(editForm);
     setEditErrors(validation.errors);
@@ -460,65 +674,38 @@ export function PropertiesSection() {
     }
 
     const aiSummary = editForm.aiSummary.trim() || generateMockAiSummary(editForm);
-    updateProperty(activeProperty.id, {
-      title: editForm.title.trim(),
-      country: editForm.country,
-      city: editForm.city.trim(),
-      area: editForm.area.trim(),
-      address: editForm.address.trim(),
-      price: editForm.exactPrice || editForm.priceRange,
-      currency: getCurrencyByCountry(editForm.country),
-      priceRange: editForm.priceRange,
-      priceUnit: editForm.priceUnit,
-      pricePerUnit: editForm.pricePerUnit,
-      bookingAmount: editForm.bookingAmount,
-      maintenanceCharges: editForm.maintenanceCharges,
-      paymentPlan: editForm.paymentPlan,
-      propertyType: editForm.propertyType,
-      listingType: editForm.listingType,
-      status: editForm.listingStatus,
-      bedrooms: editForm.bedrooms,
-      bathrooms: editForm.bathrooms,
-      balconies: editForm.balconies,
-      size: editForm.areaSize,
-      areaUnit: editForm.areaUnit,
-      floor: editForm.floor,
-      totalFloors: editForm.totalFloors,
-      furnishing: editForm.furnishing,
-      parking: editForm.parking,
-      facing: editForm.facing,
-      possessionStatus: editForm.possessionStatus,
-      description: editForm.description,
-      imageUrl: editForm.coverImageUrl,
-      galleryImages: splitLines(editForm.galleryImageUrls),
-      ownershipType: editForm.ownershipType,
-      reraStatus: editForm.reraStatus,
-      verificationStatus: editForm.verificationStatus,
-      visibility: editForm.visibility,
-      priority: editForm.priority,
-      tags: editForm.tags,
-      amenities: editForm.amenities,
-      aiSummary,
-      aiInvestmentNote: editForm.aiInvestmentNote,
-      bestBuyerType: editForm.investorFit,
-      rentalYield: editForm.rentalYield ? Number(editForm.rentalYield) : undefined,
-      appreciationForecast: editForm.appreciationForecast,
-      investorFit: editForm.investorFit,
-      riskLevel: editForm.riskLevel,
-      roiScore: editForm.roiScore,
-      trustScore: editForm.trustScore,
-      developerName: editForm.developerName,
-      assignedBroker: editForm.assignedBroker,
-      isFeatured: editForm.isFeatured,
-      isHotDeal: editForm.isHotDeal,
-      isGlobalProperty: editForm.isGlobalProperty,
-      verified: editForm.verificationStatus === "Verified",
-      roi: editForm.roiScore,
-      updatedAt: Date.now(),
-    });
-    void updatePropertyRecord(activeProperty.id, { updatedAt: Date.now() });
-    toast.success("Property updated successfully");
-    setEditOpen(false);
+    setSaving(true);
+    try {
+      const updated = await updatePropertyRow(activeProperty.id, formToPropertyPatch(editForm, aiSummary));
+      if (updated) {
+        const mapped = mapPropertyRow(updated);
+        setProperties((prev) => prev.map((item) => (item.id === mapped.id ? mapped : item)));
+      }
+      toast.success("Property updated successfully");
+      setEditOpen(false);
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to update property");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function confirmDelete() {
+    if (!deleteId) return;
+    setSaving(true);
+    try {
+      await deletePropertyRow(deleteId);
+      setProperties((prev) => prev.filter((item) => item.id !== deleteId));
+      if (activeId === deleteId) setActiveId(null);
+      setDeleteId(null);
+      toast.success("Property deleted");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to delete property");
+    } finally {
+      setSaving(false);
+    }
   }
 
   const renderForm = (
@@ -801,6 +988,29 @@ export function PropertiesSection() {
               </div>
             </div>
             <div className="space-y-2 md:col-span-3">
+              <FieldLabel label="Nearby Places" />
+              <div className="flex flex-wrap gap-2">
+                {DEFAULT_NEARBY_LABELS.map((place) => (
+                  <Button
+                    key={place}
+                    type="button"
+                    size="sm"
+                    variant={form.nearbyPlaces.includes(place) ? "default" : "outline"}
+                    onClick={() =>
+                      setForm((prev) => ({
+                        ...prev,
+                        nearbyPlaces: prev.nearbyPlaces.includes(place)
+                          ? prev.nearbyPlaces.filter((item) => item !== place)
+                          : [...prev.nearbyPlaces, place],
+                      }))
+                    }
+                  >
+                    {place}
+                  </Button>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-2 md:col-span-3">
               <FieldLabel label="AI Summary" />
               <Textarea
                 value={form.aiSummary}
@@ -819,7 +1029,7 @@ export function PropertiesSection() {
           <Button type="button" variant="outline" onClick={() => (isEdit ? setEditOpen(false) : setAddOpen(false))}>
             Cancel
           </Button>
-          <Button type="button" onClick={onSubmit} className="bg-cyan-500 text-black hover:bg-cyan-400">
+          <Button type="button" onClick={onSubmit} className="bg-cyan-500 text-black hover:bg-cyan-400" disabled={saving}>
             {submitLabel}
           </Button>
         </div>
@@ -836,7 +1046,9 @@ export function PropertiesSection() {
         </div>
         <Dialog open={addOpen} onOpenChange={setAddOpen}>
           <DialogTrigger asChild>
-            <Button onClick={() => setAddOpen(true)}>Add Property</Button>
+            <Button onClick={() => setAddOpen(true)} disabled={!workspaceId || loading}>
+              Add Property
+            </Button>
           </DialogTrigger>
           <DialogContent className="max-h-[90vh] overflow-y-auto border-white/10 bg-slate-950 text-white sm:max-w-6xl">
             <DialogHeader>
@@ -848,8 +1060,28 @@ export function PropertiesSection() {
         </Dialog>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {properties.map((property) => (
+      {loading ? (
+        <Card className="border-white/10 bg-white/5">
+          <CardContent className="p-8 text-center text-sm text-slate-300">Loading properties…</CardContent>
+        </Card>
+      ) : error ? (
+        <Card className="border-white/10 bg-white/5">
+          <CardContent className="space-y-3 p-8 text-center">
+            <div className="text-sm text-red-300">{error}</div>
+            <Button type="button" variant="outline" onClick={() => void resolveWorkspaceAndLoad()}>
+              Retry
+            </Button>
+          </CardContent>
+        </Card>
+      ) : properties.length === 0 ? (
+        <Card className="border-white/10 bg-white/5">
+          <CardContent className="p-8 text-center text-sm text-slate-300">
+            No properties found for this workspace.
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {properties.map((property) => (
           <Card key={property.id} className="overflow-hidden transition-shadow hover:command-card-active">
             <CardHeader>
               <div className="flex items-start justify-between gap-3">
@@ -867,6 +1099,9 @@ export function PropertiesSection() {
               <div className="flex flex-wrap gap-2 text-xs">
                 <Badge variant="outline">{property.listingType}</Badge>
                 <Badge variant="outline">{property.propertyType}</Badge>
+                <Badge variant="outline">ROI {property.roiScore ?? property.roi ?? 0}/100</Badge>
+                <Badge variant="outline">{property.riskLevel || "Medium"} Risk</Badge>
+                <Badge variant="outline">{property.city || "City N/A"}</Badge>
                 {property.verified ? <Badge className="bg-emerald-500/20 text-emerald-100">Verified</Badge> : null}
               </div>
               <div className="flex items-center justify-between text-sm">
@@ -876,11 +1111,20 @@ export function PropertiesSection() {
               <div className="flex gap-2">
                 <Button size="sm" variant="outline" className="flex-1" onClick={() => openEdit(property)}>Edit</Button>
                 <Button size="sm" className="flex-1" onClick={() => openDetails(property)}>View Details</Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="text-red-300 hover:text-red-200"
+                  onClick={() => setDeleteId(property.id)}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
               </div>
             </CardContent>
           </Card>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
       <Dialog
         open={Boolean(activeProperty)}
@@ -1062,6 +1306,8 @@ export function PropertiesSection() {
                             ["Parking", activeProperty.parking || "Not specified"],
                             ["Facing", activeProperty.facing || "Not specified"],
                             ["Possession", activeProperty.possessionStatus || "Not specified"],
+                            ["Developer", activeProperty.developerName || "Not specified"],
+                            ["Assigned Broker", activeProperty.assignedBroker || "Not specified"],
                           ].map(([label, value]) => (
                             <div key={label} className="rounded-2xl border border-white/10 bg-slate-950/60 p-3">
                               <div className="text-[11px] uppercase tracking-[0.25em] text-slate-500">{label}</div>
@@ -1088,6 +1334,8 @@ export function PropertiesSection() {
                             ["ROI Score", `${activeProperty.roiScore ?? activeProperty.roi ?? 0}/100`],
                             ["Appreciation", activeProperty.appreciationForecast != null ? `${activeProperty.appreciationForecast}%` : "Not specified"],
                             ["Listing Status", activeProperty.status || "Available"],
+                            ["Risk Level", activeProperty.riskLevel || "Medium"],
+                            ["Trust Score", `${activeProperty.trustScore ?? 0}/100`],
                           ].map(([label, value]) => (
                             <div key={label} className="rounded-2xl border border-white/10 bg-slate-950/60 p-3">
                               <div className="text-[11px] uppercase tracking-[0.25em] text-slate-500">{label}</div>
@@ -1157,6 +1405,18 @@ export function PropertiesSection() {
                               <div className="mt-1 text-sm text-white">{activeProperty.riskLevel || "Medium"}</div>
                             </div>
                           </div>
+                          <div className="rounded-2xl border border-white/10 bg-slate-950/60 p-3">
+                            <div className="text-[11px] uppercase tracking-[0.25em] text-slate-500">Tags</div>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {activeProperty.tags?.length
+                                ? activeProperty.tags.map((tag) => (
+                                    <Badge key={tag} variant="outline" className="border-white/15 text-slate-200">
+                                      {tag}
+                                    </Badge>
+                                  ))
+                                : <span className="text-sm text-slate-400">No tags added</span>}
+                            </div>
+                          </div>
                         </CardContent>
                       </Card>
 
@@ -1174,6 +1434,12 @@ export function PropertiesSection() {
                                 "This property is presented as an investment-ready listing with premium location visibility and a clean buyer story."}
                             </p>
                           </div>
+                          {activeProperty.aiInvestmentNote ? (
+                            <div className="rounded-2xl border border-white/10 bg-slate-950/60 p-4">
+                              <div className="text-xs uppercase tracking-[0.3em] text-slate-500">AI Investment Note</div>
+                              <p className="mt-2 text-sm leading-6 text-slate-100">{activeProperty.aiInvestmentNote}</p>
+                            </div>
+                          ) : null}
                           <div className="grid gap-3 sm:grid-cols-2">
                             <div className="rounded-2xl border border-white/10 bg-slate-950/60 p-3">
                               <div className="text-[11px] uppercase tracking-[0.25em] text-slate-500">Best Buyer Type</div>
@@ -1238,6 +1504,14 @@ export function PropertiesSection() {
                 <CardContent className="space-y-2 p-4">
                   <div className="text-lg font-semibold text-white">{activeProperty.title}</div>
                   <div className="text-sm text-slate-400">{getPropertyPriceLabel(activeProperty)}</div>
+                  <div className="grid gap-2 text-xs text-slate-300 sm:grid-cols-2">
+                    <span>Type: {activeProperty.propertyType || "Not specified"}</span>
+                    <span>Status: {activeProperty.status || "Available"}</span>
+                    <span>ROI: {activeProperty.roiScore ?? activeProperty.roi ?? 0}/100</span>
+                    <span>Risk: {activeProperty.riskLevel || "Medium"}</span>
+                    <span>Payment: {activeProperty.paymentPlan || "Not specified"}</span>
+                    <span>Possession: {activeProperty.possessionStatus || "Not specified"}</span>
+                  </div>
                   <div className="text-xs text-slate-500">{getPropertyLink(activeProperty)}</div>
                 </CardContent>
               </Card>
@@ -1290,7 +1564,7 @@ export function PropertiesSection() {
                       <div>
                         <div className="font-medium text-white">{lead.name}</div>
                         <div className="text-xs text-slate-400">
-                          {lead.country} • {lead.city} • {lead.buyerType}
+                          {lead.country} • {lead.city} • {lead.propertyType} • {lead.budget || "Budget N/A"}
                         </div>
                       </div>
                       <Badge variant="outline" className="border-cyan-500/30 text-cyan-100">
@@ -1328,6 +1602,30 @@ export function PropertiesSection() {
           {renderForm(editForm, setEditForm, editErrors, "Save Changes", submitEdit, true)}
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={Boolean(deleteId)} onOpenChange={(open) => !open && setDeleteId(null)}>
+        <AlertDialogContent className="border-white/10 bg-slate-950 text-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete property?</AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-400">
+              This will permanently delete {propertyToDelete?.title || "this property"} from Supabase.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={saving}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={saving}
+              className="bg-red-500 text-white hover:bg-red-400"
+              onClick={(event) => {
+                event.preventDefault();
+                void confirmDelete();
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -39,12 +39,12 @@ export const LISTING_TYPES = ["Sale", "Rent", "Lease", "Pre-launch", "Resale", "
 export const PROPERTY_CATEGORIES = ["Residential", "Commercial", "Land / Plot", "Industrial", "Mixed-use", "Hospitality"] as const;
 export const LISTING_STATUS = ["Available", "Under Review", "Sold", "Rented", "Reserved", "Off Market"] as const;
 export const PROPERTY_STATUS = ["Available", "Under Review", "Sold", "Rented", "Reserved", "Off Market"] as const;
-export const OWNERSHIP_TYPES = ["Freehold", "Leasehold", "Cooperative", "Power of Attorney", "Builder Ownership", "Unknown"] as const;
+export const OWNERSHIP_TYPES = ["Freehold", "Leasehold", "Builder Ownership", "Power of Attorney"] as const;
 export const RERA_STATUS = ["Verified", "Pending", "Not Applicable", "Not Verified"] as const;
 export const VERIFICATION_STATUS = ["Verified", "Needs Review", "High Risk", "Pending Documents"] as const;
 export const VISIBILITY_OPTIONS = ["Public", "Private", "Team Only", "Featured"] as const;
 export const PRIORITY_OPTIONS = ["Normal", "Hot Property", "Premium Listing", "Urgent Sale"] as const;
-export const PAYMENT_PLAN_OPTIONS = ["Full Payment", "Down Payment + EMI", "10/90 Plan", "20/80 Plan", "30/70 Plan", "Construction Linked", "Custom"] as const;
+export const PAYMENT_PLAN_OPTIONS = ["Full Payment", "Down Payment + EMI", "10/90", "20/80", "30/70", "Construction Linked"] as const;
 export const UNIT_OPTIONS = ["sq ft", "sq m", "acre", "hectare"] as const;
 export const AREA_UNIT_OPTIONS = UNIT_OPTIONS;
 export const BEDROOM_OPTIONS = ["Studio", "1", "2", "3", "4", "5", "6+", "Not Applicable"] as const;
@@ -58,10 +58,7 @@ export const POSSESSION_OPTIONS = [
   "Ready to Move",
   "Under Construction",
   "New Launch",
-  "Pre-Launch",
-  "Possession in 6 Months",
-  "Possession in 1 Year",
-  "Possession in 2+ Years",
+  "Pre-launch",
 ] as const;
 export const APPRECIATION_OPTIONS = ["Low Growth", "Stable", "Moderate Growth", "High Growth", "Very High Growth"] as const;
 export const INVESTOR_FIT_OPTIONS = ["Rental Income", "Capital Appreciation", "Luxury Investment", "Commercial Yield", "Safe Long-Term Hold", "Not Investor Focused"] as const;
@@ -402,6 +399,7 @@ export type PropertyFormData = {
   reraStatus: string;
   developerName: string;
   trustScore: number;
+  nearbyPlaces: string[];
   verificationStatus: string;
   visibility: string;
   priority: string;
@@ -458,6 +456,7 @@ export function createDefaultPropertyForm(): PropertyFormData {
     reraStatus: "Pending",
     developerName: "",
     trustScore: 80,
+    nearbyPlaces: [],
     verificationStatus: "Pending Documents",
     visibility: "Public",
     priority: "Normal",

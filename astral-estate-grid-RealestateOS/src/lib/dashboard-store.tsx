@@ -8,6 +8,7 @@ import {
 import { getSupabase, isSupabaseConfigured } from "./supabase-client";
 import { fetchUserProfile } from "./supabase-auth";
 import { fetchLeads, createLead as createLeadRow, updateLeadRow, deleteLeadRow, subscribeToLeads } from "./leads-api";
+import { buildFullPhoneNumber, getNationalDigits, normalizeCountryCode } from "./lead-phone-otp";
 
 type SectionKey =
   | "dashboard" | "leads" | "ai-conversations" | "properties" | "appointments"
@@ -85,6 +86,8 @@ type Ctx = {
   totalRevenue: number;
   isAuthenticated: boolean;
   user: UserProfile;
+  authUserId?: string | undefined;
+  workspaceId?: string | undefined;
   login: (
     payload: { email: string; name?: string; role?: string; company?: string; replace?: boolean },
     opts?: { silent?: boolean },
@@ -119,7 +122,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [aiOpen, setAiOpen] = useState(false);
   const [addLeadOpen, setAddLeadOpen] = useState(false);
-  const [leads, setLeads] = useState<Lead[]>(isSupabaseConfigured() ? [] : SEED_LEADS);
+  const [leads, setLeads] = useState<Lead[]>([]);
   const [properties, setProperties] = useState<Property[]>(SEED_PROPERTIES);
   const [appointments, setAppointments] = useState<Appointment[]>(SEED_APPTS);
   const [notifications, setNotifications] = useState<Notification[]>(SEED_NOTIFICATIONS);
@@ -129,6 +132,8 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const [insights, setInsights] = useState<InsightItem[]>(SEED_INSIGHTS);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [user, setUser] = useState<UserProfile>(DEFAULT_USER);
+  const [workspaceId, setWorkspaceId] = useState<string | undefined>(DEFAULT_USER.workspaceId);
+  const [authUserId, setAuthUserId] = useState<string | undefined>(undefined);
   const [authReady, setAuthReady] = useState(false);
   const [passwordRecovery, setPasswordRecovery] = useState(false);
 
@@ -165,9 +170,14 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         let created;
         if (sb) {
           const userId = (sb.auth.user?.id) || undefined;
+          const dialCode = normalizeCountryCode(l.countryCode);
+          const nationalPhone = getNationalDigits(l.phone);
           created = await createLeadRow(undefined, userId, {
             name: l.name,
-            phone: l.phone,
+            full_name: l.name,
+            country_code: dialCode,
+            phone: nationalPhone,
+            full_phone_number: buildFullPhoneNumber(dialCode, nationalPhone),
             email: l.email,
             country: l.country,
             city: l.city,
@@ -255,7 +265,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     let mounted = true;
     const sb = getSupabase();
     if (!isSupabaseConfigured() || !sb) return;
-    const workspaceId = user.workspaceId ?? undefined;
+    const workspaceIdLocal = workspaceId ?? user.workspaceId ?? undefined;
     const userId = (() => {
       try {
         // try reading session user id via supabase client
@@ -265,14 +275,14 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         return undefined;
       }
     })();
-    if (!workspaceId) {
+    if (!workspaceIdLocal) {
       console.log("[leads] workspaceId missing - show loading/empty state");
       return;
     }
     (async () => {
       try {
-        console.log("[leads] fetching for workspaceId:", workspaceId, "userId:", userId);
-        const fetched = await fetchLeads(workspaceId, userId);
+        console.log("[leads] fetching for workspaceId:", workspaceIdLocal, "userId:", userId);
+        const fetched = await fetchLeads(workspaceIdLocal, userId);
         if (!mounted) return;
         console.log("[leads] fetched rows:", fetched.length);
         const mapped = fetched.map(mapLeadRow);
@@ -362,6 +372,39 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     fetch('http://127.0.0.1:7615/ingest/fd1a74b4-c397-45f6-9718-7b61c882f570',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'06225e'},body:JSON.stringify({sessionId:'06225e',location:'src/lib/dashboard-store.tsx:applyFromSupabaseUser',message:'applyFromSupabaseUser start',data:{userId:sessionUser?.id},timestamp:Date.now(),hypothesisId:'H2',runId:'pre-fix'})}).catch(()=>{});
     // #endregion
       const profile = await fetchUserProfile(sb, sessionUser.id);
+      // If profile missing, create a basic profile row and ensure workspace_members entry exists.
+      let finalProfile = profile;
+      if (!profile) {
+        try {
+          const displayName = sessionUser.user_metadata?.full_name ?? sessionUser.email?.split("@")[0] ?? "User";
+          const { data: upsertData, error: upsertErr } = await sb.from("profiles").upsert(
+            {
+              id: sessionUser.id,
+              full_name: displayName,
+              company_name: "",
+              role: "Agent",
+              workspace_id: null,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "id" },
+          );
+          if (upsertErr) {
+            console.warn("upsert profile error", upsertErr);
+          } else {
+            finalProfile = upsertData as any;
+          }
+
+          // Create a workspace and membership if none exists (best-effort).
+          const { data: wsRow, error: wsErr } = await sb.from("workspaces").insert({ name: `${displayName}'s workspace` }).select().maybeSingle();
+          if (!wsErr && wsRow?.id) {
+            const { error: wmErr } = await sb.from("workspace_members").insert({ workspace_id: wsRow.id, user_id: sessionUser.id });
+            if (wmErr) console.warn("workspace_members insert error", wmErr);
+            finalProfile = { ...(finalProfile ?? {}), workspace_id: wsRow.id };
+          }
+        } catch (e) {
+          console.warn("failed to create profile/workspace_members", e);
+        }
+      }
       const meta = sessionUser.user_metadata as Record<string, string | undefined>;
       const name = profile?.full_name || meta?.full_name || sessionUser.email?.split("@")[0] || "User";
       const nextUser: UserProfile = {
@@ -389,6 +432,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         console.warn("workspace_members lookup failed", e);
       }
       setUser(nextUser);
+      if (sessionUser?.id) setAuthUserId(sessionUser.id);
       setIsAuthenticated(true);
       persistUser(nextUser);
       persistAuth(true);
@@ -396,36 +440,47 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         pushActivity(`User signed in: ${nextUser.name}`, "user-check", "auth");
         toast.success("Logged in", { description: `Welcome, ${nextUser.name}` });
       }
-      // Fetch leads for workspace when user signs in
+      // Fetch leads for workspace when user signs in (determine workspaceId then fetch)
       try {
-        const workspaceId = nextUser.workspaceId ?? (nextUser.company && /^[0-9a-fA-F-]{36}$/.test(nextUser.company) ? nextUser.company : undefined);
-        console.log("[leads] userId:", sessionUser.id, "profile.workspace_id:", profile?.workspace_id, "resolvedWorkspaceId:", workspaceId);
-        const fetchedLeads = await fetchLeads(workspaceId, sessionUser.id);
-        console.log("[leads] fetched count:", (fetchedLeads || []).length);
-        // #region agent log
-        fetch('http://127.0.0.1:7615/ingest/fd1a74b4-c397-45f6-9718-7b61c882f570',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'06225e'},body:JSON.stringify({sessionId:'06225e',location:'src/lib/dashboard-store.tsx:applyFromSupabaseUser',message:'fetchedLeads',data:{count:(fetchedLeads||[]).length},timestamp:Date.now(),hypothesisId:'H3',runId:'pre-fix'})}).catch(()=>{});
-        // #endregion
-        if (fetchedLeads && fetchedLeads.length) {
-          // Map to Lead type used in store
-          setLeads(
-            fetchedLeads.map((r) => ({
-              id: r.id,
-              name: r.name,
-              phone: r.phone ?? "",
-              email: r.email ?? "",
-              country: r.country ?? "",
-              city: r.city ?? "",
-              budget: r.budget ?? "",
-              propertyType: (r.property_type as string) ?? "",
-              buyerType: (r.buyer_type as string) ?? "",
-              urgency: (r.urgency as string) ?? "Medium",
-              source: r.source ?? "",
-              verified: Boolean(r.verified),
-              aiScore: typeof r.ai_score === "number" ? r.ai_score : Math.round(Math.random() * 100),
-              recommendedAction: r.recommended_action ?? "",
-              createdAt: r.created_at ? Date.parse(r.created_at) : Date.now(),
-            })),
-          );
+        let resolved = nextUser.workspaceId ?? (nextUser.company && /^[0-9a-fA-F-]{36}$/.test(nextUser.company) ? nextUser.company : undefined);
+        // workspace_members fallback
+        if (!resolved) {
+          try {
+            const { data: wmRow, error: wmErr } = await sb.from("workspace_members").select("workspace_id").eq("user_id", sessionUser.id).maybeSingle();
+            if (!wmErr && wmRow?.workspace_id) resolved = wmRow.workspace_id;
+          } catch (e) {
+            console.warn("workspace_members lookup failed", e);
+          }
+        }
+        setWorkspaceId(resolved);
+        console.log("[leads] userId:", sessionUser.id, "profile.workspace_id:", profile?.workspace_id, "finalWorkspaceId:", resolved);
+        if (resolved) {
+          const fetchedLeads = await fetchLeads(resolved, sessionUser.id);
+          console.log("[leads] fetched count:", (fetchedLeads || []).length);
+          // #region agent log
+          fetch('http://127.0.0.1:7615/ingest/fd1a74b4-c397-45f6-9718-7b61c882f570',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'06225e'},body:JSON.stringify({sessionId:'06225e',location:'src/lib/dashboard-store.tsx:applyFromSupabaseUser',message:'fetchedLeads',data:{count:(fetchedLeads||[]).length},timestamp:Date.now(),hypothesisId:'H3',runId:'pre-fix'})}).catch(()=>{});
+          // #endregion
+          if (fetchedLeads && fetchedLeads.length) {
+            setLeads(
+              fetchedLeads.map((r) => ({
+                id: r.id,
+                name: r.name,
+                phone: r.phone ?? "",
+                email: r.email ?? "",
+                country: r.country ?? "",
+                city: r.city ?? "",
+                budget: r.budget ?? "",
+                propertyType: (r.property_type as string) ?? "",
+                buyerType: (r.buyer_type as string) ?? "",
+                urgency: (r.urgency as string) ?? "Medium",
+                source: r.source ?? "",
+                verified: Boolean(r.verified),
+                aiScore: typeof r.ai_score === "number" ? r.ai_score : Math.round(Math.random() * 100),
+                recommendedAction: r.recommended_action ?? "",
+                createdAt: r.created_at ? Date.parse(r.created_at) : Date.now(),
+              })),
+            );
+          }
         }
       } catch (e) {
         console.warn("fetchLeads on sign in failed", e);
@@ -446,6 +501,8 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         fetch('http://127.0.0.1:7615/ingest/fd1a74b4-c397-45f6-9718-7b61c882f570',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'06225e'},body:JSON.stringify({sessionId:'06225e',location:'src/lib/dashboard-store.tsx:getUser',message:'getUser result',data:{hasUser:!!sessionUser, userId:sessionUser?.id},timestamp:Date.now(),hypothesisId:'H6',runId:'pre-fix'})}).catch(()=>{});
         // #endregion
         if (sessionUser) {
+          // set auth user id explicitly (UUID)
+          setAuthUserId(sessionUser.id);
           await applyFromSupabaseUser(sessionUser as User, true);
         }
       } catch (e) {
@@ -494,8 +551,8 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     let unsub: (() => void) | null = null;
     (async () => {
       try {
-        const workspaceId = user.workspaceId ?? undefined;
-        unsub = subscribeToLeads(workspaceId, (payload) => {
+        const workspaceIdSub = workspaceId ?? user.workspaceId ?? undefined;
+        unsub = subscribeToLeads(workspaceIdSub, (payload) => {
           // #region agent log
           fetch('http://127.0.0.1:7615/ingest/fd1a74b4-c397-45f6-9718-7b61c882f570',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'06225e'},body:JSON.stringify({sessionId:'06225e',location:'src/lib/dashboard-store.tsx:subscribeToLeads.callback',message:'realtime lead payload',data:{event:payload.event, id:payload.new?.id ?? payload.old?.id},timestamp:Date.now(),hypothesisId:'H4',runId:'pre-fix'})}).catch(()=>{});
           // #endregion
@@ -605,6 +662,8 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     selectedLeadId, setSelectedLeadId, leadFilters, setLeadFilters, totalRevenue,
     isAuthenticated, user, login, logout, updateUserProfile, authReady,
     passwordRecovery, clearPasswordRecovery,
+    workspaceId,
+    authUserId,
   };
 
   return <DashboardContext.Provider value={value}>{children}</DashboardContext.Provider>;

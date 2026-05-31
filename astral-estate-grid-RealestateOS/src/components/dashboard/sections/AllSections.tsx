@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Component, useCallback, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from "react";
 import { useDashboard } from "@/lib/dashboard-store";
 import { GlowCard, SectionHeader, Mini, urgencyColor } from "../utils";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -19,11 +19,18 @@ import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieCh
 import { BUDGETS, BUYER_TYPES, COUNTRIES, SEED_BROKERS, SOURCES, type Appointment } from "@/lib/dashboard-data";
 import { BillingTabPanel } from "@/components/dashboard/settings/BillingTabPanel";
 import { uploadPropertyImage, updatePropertyImages } from "@/lib/property-api";
-import { createAppointment as createAppointmentRecord, linkAppointmentToLead, fetchAppointments as fetchAppointmentsRecord, updateAppointment as updateAppointmentRecord } from "@/lib/appointment-api";
 import { RevenueCommandCenter } from "./RevenueCommandCenter";
 import { BrokerPerformanceCommandCenter } from "./BrokerPerformanceCommandCenter";
 import { AiIntelligenceCommandHub } from "./AiIntelligenceCommandHub";
 import { AiMarketForecastingEngine } from "./AiMarketForecastingEngine";
+import { getSupabase, isSupabaseConfigured } from "@/lib/supabase-client";
+import {
+  createAppointment as createAppointmentRow,
+  fetchAppointmentsWithMeta,
+  subscribeToAppointmentUpdates,
+  updateAppointment as updateAppointmentRow,
+} from "@/services/appointmentsService";
+import type { AppointmentRow } from "@/types/appointment";
 
 const APPOINTMENT_TYPES = ["Site Visit", "Call", "Video Meeting", "Office Meeting", "Follow-up"] as const;
 const APPOINTMENT_STATUSES = ["Pending", "Confirmed", "Rescheduled", "Cancelled", "Completed"] as const;
@@ -74,6 +81,10 @@ function sanitizeDigits(value: string) {
   return value.replace(/[^\d]/g, "");
 }
 
+function isUuid(value?: string): value is string {
+  return Boolean(value && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value));
+}
+
 function getAppointmentCountryRule(country: string) {
   return APPOINTMENT_PHONE_RULES[country] ?? APPOINTMENT_PHONE_RULES.Other;
 }
@@ -99,6 +110,92 @@ function createAppointmentForm(): AppointmentFormState {
     notes: "",
     status: "Pending",
   };
+}
+
+function mapAppointmentStatus(status?: string): Appointment["status"] {
+  const raw = (status || "Pending").toLowerCase();
+  if (raw === "confirmed") return "Confirmed";
+  if (raw === "cancelled" || raw === "canceled") return "Cancelled";
+  if (raw === "rescheduled") return "Rescheduled";
+  if (raw === "completed") return "Completed";
+  return "Pending";
+}
+
+function statusToRow(status: Appointment["status"] | string): string {
+  if (status === "Confirmed") return "confirmed";
+  if (status === "Cancelled") return "cancelled";
+  if (status === "Rescheduled") return "rescheduled";
+  if (status === "Completed") return "completed";
+  return "scheduled";
+}
+
+function mapAppointmentRow(row: AppointmentRow, propertyTitle?: string): Appointment {
+  return {
+    id: row.id,
+    leadId: row.lead_id,
+    leadName: row.lead_name || "Unnamed lead",
+    phone: row.lead_phone || "",
+    email: row.lead_email || "",
+    appointmentType: row.appointment_type as Appointment["appointmentType"],
+    property: propertyTitle || row.property_id || "TBD",
+    propertyId: row.property_id,
+    date: row.meeting_date || "",
+    time: row.meeting_time || "",
+    meetingLocation: row.location || "",
+    notes: row.notes || "",
+    status: mapAppointmentStatus(row.appointment_status),
+    assignedBroker: row.assigned_broker || "",
+    broker: row.assigned_broker || "",
+    createdAt: row.created_at ? Date.parse(row.created_at) : undefined,
+    updatedAt: row.updated_at ? Date.parse(row.updated_at) : undefined,
+  };
+}
+
+function appointmentToRow(input: Appointment): Partial<AppointmentRow> {
+  return {
+    lead_id: input.leadId,
+    property_id: isUuid(input.propertyId) ? input.propertyId : undefined,
+    appointment_type: input.appointmentType,
+    appointment_status: statusToRow(input.status),
+    lead_name: input.leadName,
+    lead_phone: input.phone,
+    lead_email: input.email,
+    meeting_date: input.date,
+    meeting_time: input.time,
+    location: input.meetingLocation,
+    assigned_broker: input.assignedBroker || input.broker,
+    notes: input.notes,
+  };
+}
+
+class AppointmentsErrorBoundary extends Component<
+  { children: ReactNode },
+  { error: Error | null }
+> {
+  state = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("[AppointmentsSection] render crash", error, info);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div>
+          <SectionHeader title="Appointments" subtitle="Site visits and broker scheduling" />
+          <GlowCard className="py-12 text-center text-muted-foreground">
+            <div className="mb-2 text-red-300">Appointments page failed to render.</div>
+            <div className="text-xs">{this.state.error.message}</div>
+          </GlowCard>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 // =============== AI Conversations ===============
@@ -917,7 +1014,19 @@ function PropertiesSectionLegacy() {
 
 // =============== Appointments ===============
 export function AppointmentsSection() {
-  const { appointments, properties, addAppointment, updateAppointment, pushActivity } = useDashboard();
+  return (
+    <AppointmentsErrorBoundary>
+      <AppointmentsSectionContent />
+    </AppointmentsErrorBoundary>
+  );
+}
+
+function AppointmentsSectionContent() {
+  const { properties, pushActivity } = useDashboard();
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [reschedId, setReschedId] = useState<string | null>(null);
   const [rDate, setRDate] = useState("");
@@ -926,9 +1035,98 @@ export function AppointmentsSection() {
   const [form, setForm] = useState<AppointmentFormState>(() => createAppointmentForm());
   const [errors, setErrors] = useState<Record<string, string>>({});
 
+  const safeProperties = useMemo(() => (Array.isArray(properties) ? properties.filter(Boolean) : []), [properties]);
+  const propertyTitleById = useMemo(
+    () => new Map(safeProperties.map((property) => [property.id, property.title || "Untitled property"])),
+    [safeProperties],
+  );
+
+  const loadAppointments = useCallback(async (nextWorkspaceId: string) => {
+    setLoading(true);
+    const result = await fetchAppointmentsWithMeta(nextWorkspaceId);
+    const rows = Array.isArray(result.data) ? result.data.filter(Boolean) : [];
+    const mapped = rows.map((row) => mapAppointmentRow(row, row.property_id ? propertyTitleById.get(row.property_id) : undefined));
+    console.log("[AppointmentsSection] appointments count", mapped.length);
+    console.log("[AppointmentsSection] fetch errors", result.error);
+    setAppointments(mapped);
+    setError(result.error);
+    setLoading(false);
+  }, [propertyTitleById]);
+
+  const resolveWorkspaceAndLoad = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    setAppointments([]);
+
+    if (!isSupabaseConfigured()) {
+      setError("Supabase is not configured");
+      setLoading(false);
+      return;
+    }
+
+    const sb = getSupabase();
+    if (!sb) {
+      setError("Supabase client unavailable");
+      setLoading(false);
+      return;
+    }
+
+    const { data: authData, error: authError } = await sb.auth.getUser();
+    const userId = authData?.user?.id;
+    if (authError || !userId) {
+      setError(authError?.message ?? "No authenticated user session");
+      setLoading(false);
+      return;
+    }
+
+    const { data: profile, error: profileError } = await sb
+      .from("profiles")
+      .select("*")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (profileError) {
+      setError(profileError.message);
+      setLoading(false);
+      return;
+    }
+
+    const nextWorkspaceId = (profile as { workspace_id?: string | null } | null)?.workspace_id ?? null;
+    console.log("[AppointmentsSection] workspace_id", nextWorkspaceId);
+    setWorkspaceId(nextWorkspaceId);
+    if (!nextWorkspaceId) {
+      console.log("[AppointmentsSection] fetch errors", "workspace_id not found on profile");
+      setError("workspace_id not found on profile");
+      setLoading(false);
+      return;
+    }
+
+    await loadAppointments(nextWorkspaceId);
+  }, [loadAppointments]);
+
   useEffect(() => {
-    void fetchAppointmentsRecord();
-  }, []);
+    void resolveWorkspaceAndLoad();
+  }, [resolveWorkspaceAndLoad]);
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    return subscribeToAppointmentUpdates(workspaceId, (payload) => {
+      const event = payload as { eventType?: string; new?: AppointmentRow; old?: AppointmentRow };
+      if (event.eventType === "DELETE" && event.old?.id) {
+        setAppointments((prev) => prev.filter((item) => item.id !== event.old!.id));
+        return;
+      }
+      if (!event.new?.id) return;
+      const mapped = mapAppointmentRow(
+        event.new,
+        event.new.property_id ? propertyTitleById.get(event.new.property_id) : undefined,
+      );
+      setAppointments((prev) => {
+        const exists = prev.some((item) => item.id === mapped.id);
+        return exists ? prev.map((item) => (item.id === mapped.id ? mapped : item)) : [mapped, ...prev];
+      });
+    });
+  }, [workspaceId, propertyTitleById]);
 
   const statusBadge = (s: string) =>
     s === "Confirmed"
@@ -946,7 +1144,7 @@ export function AppointmentsSection() {
   const phoneDigits = sanitizeDigits(form.phone);
   const phoneValid = phoneDigits.length >= phoneRule.min && phoneDigits.length <= phoneRule.max;
   const emailValid = !form.email.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim());
-  const propertyLabel = properties.find((p) => p.id === form.propertyInterested)?.title || form.propertyInterested || "TBD";
+  const propertyLabel = safeProperties.find((p) => p.id === form.propertyInterested)?.title || form.propertyInterested || "TBD";
 
   const resetForm = () => {
     setForm(createAppointmentForm());
@@ -961,17 +1159,56 @@ export function AppointmentsSection() {
     setRNotes(a?.notes ?? "");
   };
 
-  const submitReschedule = () => {
+  const replaceAppointment = useCallback((next: Appointment) => {
+    setAppointments((prev) => prev.map((item) => (item.id === next.id ? next : item)));
+  }, []);
+
+  const updateAppointmentStatus = useCallback(
+    async (appointment: Appointment, status: Appointment["status"]) => {
+      const optimistic = { ...appointment, status, updatedAt: Date.now() };
+      replaceAppointment(optimistic);
+      try {
+        const updated = await updateAppointmentRow(appointment.id, { appointment_status: statusToRow(status) });
+        if (updated) {
+          replaceAppointment(mapAppointmentRow(updated, updated.property_id ? propertyTitleById.get(updated.property_id) : undefined));
+        }
+        pushActivity(`Appointment ${status.toLowerCase()}: ${appointment.leadName}`, "calendar", "visit");
+        toast.success(status === "Cancelled" ? "Appointment cancelled" : `Appointment ${status.toLowerCase()}`);
+      } catch (err) {
+        console.error(err);
+        replaceAppointment(appointment);
+        toast.error("Failed to update appointment");
+      }
+    },
+    [propertyTitleById, pushActivity, replaceAppointment],
+  );
+
+  const submitReschedule = async () => {
     if (!reschedId) return;
     if (!rDate.trim() || !rTime.trim()) {
       toast.error("Date and time required");
       return;
     }
-    updateAppointment(reschedId, { date: rDate, time: rTime, notes: rNotes, status: "Rescheduled", updatedAt: Date.now() });
-    void updateAppointmentRecord(reschedId, { date: rDate, time: rTime, notes: rNotes, status: "Rescheduled", updatedAt: Date.now() });
-    pushActivity(`Appointment rescheduled to ${rDate} ${rTime}`, "calendar", "visit");
-    toast.success("Appointment rescheduled");
-    setReschedId(null);
+    const current = appointments.find((item) => item.id === reschedId);
+    if (!current) return;
+    const optimistic: Appointment = { ...current, date: rDate, time: rTime, notes: rNotes, status: "Rescheduled", updatedAt: Date.now() };
+    replaceAppointment(optimistic);
+    try {
+      const updated = await updateAppointmentRow(reschedId, {
+        meeting_date: rDate,
+        meeting_time: rTime,
+        notes: rNotes,
+        appointment_status: statusToRow("Rescheduled"),
+      });
+      if (updated) replaceAppointment(mapAppointmentRow(updated, updated.property_id ? propertyTitleById.get(updated.property_id) : undefined));
+      pushActivity(`Appointment rescheduled to ${rDate} ${rTime}`, "calendar", "visit");
+      toast.success("Appointment rescheduled");
+      setReschedId(null);
+    } catch (err) {
+      console.error(err);
+      replaceAppointment(current);
+      toast.error("Failed to reschedule appointment");
+    }
   };
 
   const submitAdd = async () => {
@@ -989,8 +1226,12 @@ export function AppointmentsSection() {
       toast.error("Please fix the highlighted fields");
       return;
     }
+    if (!workspaceId) {
+      toast.error("Workspace not ready");
+      return;
+    }
 
-    const selectedProperty = properties.find((p) => p.id === form.propertyInterested) ?? null;
+    const selectedProperty = safeProperties.find((p) => p.id === form.propertyInterested) ?? null;
     const appointment: Appointment = {
       id: `appt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       leadName: form.leadName.trim(),
@@ -1017,23 +1258,43 @@ export function AppointmentsSection() {
       updatedAt: Date.now(),
     };
 
-    const created = await createAppointmentRecord(appointment);
-    addAppointment(created);
-    toast.success("Appointment booked successfully");
-    setAddOpen(false);
-    resetForm();
+    try {
+      const created = await createAppointmentRow(workspaceId, appointmentToRow(appointment));
+      const mapped = created
+        ? mapAppointmentRow(created, created.property_id ? propertyTitleById.get(created.property_id) : selectedProperty?.title)
+        : appointment;
+      setAppointments((prev) => [mapped, ...prev]);
+      toast.success("Appointment booked successfully");
+      setAddOpen(false);
+      resetForm();
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to book appointment");
+    }
   };
 
   return (
     <div>
       <SectionHeader title="Appointments" subtitle="Site visits and broker scheduling">
-        <Button onClick={() => setAddOpen(true)} className="neon-border bg-primary/90">
+        <Button onClick={() => setAddOpen(true)} className="neon-border bg-primary/90" disabled={!workspaceId || loading}>
           <Plus className="h-4 w-4" /> New Appointment
         </Button>
       </SectionHeader>
 
-      <div className="grid gap-3">
-        {appointments.map((a) => (
+      {loading ? (
+        <GlowCard className="py-12 text-center text-muted-foreground">Loading appointments…</GlowCard>
+      ) : error ? (
+        <GlowCard className="py-12 text-center text-muted-foreground">
+          <div className="mb-3 text-red-300">{error}</div>
+          <Button type="button" variant="outline" onClick={() => void resolveWorkspaceAndLoad()}>
+            Retry
+          </Button>
+        </GlowCard>
+      ) : appointments.length === 0 ? (
+        <GlowCard className="py-12 text-center text-muted-foreground">No appointments found for this workspace.</GlowCard>
+      ) : (
+        <div className="grid gap-3">
+          {appointments.map((a) => (
           <GlowCard key={a.id}>
             <div className="flex flex-wrap items-center gap-4">
               <div className="h-12 w-12 rounded-xl bg-primary/15 border border-primary/30 flex items-center justify-center">
@@ -1041,42 +1302,32 @@ export function AppointmentsSection() {
               </div>
               <div className="flex-1 min-w-0">
                 <div className="font-semibold">
-                  {a.leadName} <span className="text-muted-foreground">→</span> {a.property}
+                  {a.leadName || "Unnamed lead"} <span className="text-muted-foreground">→</span> {a.property || "TBD"}
                 </div>
                 <div className="text-sm text-muted-foreground">
-                  {a.date} • {a.time}
+                  {a.date || "Date TBD"} • {a.time || "Time TBD"}
                   {a.appointmentType ? ` • ${a.appointmentType}` : ""}
                   {a.buyerType ? ` • ${a.buyerType}` : ""}
                   {a.broker ? ` • ${a.broker}` : ""}
                 </div>
               </div>
-              <Badge variant="outline" className={statusBadge(a.status)}>
-                {a.status}
+              <Badge variant="outline" className={statusBadge(a.status || "Pending")}>
+                {a.status || "Pending"}
               </Badge>
               <div className="flex gap-2 flex-wrap">
                 <Button
                   size="sm"
                   variant="outline"
-                  disabled={a.status === "Confirmed"}
-                  onClick={() => {
-                    updateAppointment(a.id, { status: "Confirmed", updatedAt: Date.now() });
-                    void updateAppointmentRecord(a.id, { status: "Confirmed", updatedAt: Date.now() });
-                    pushActivity(`Visit confirmed: ${a.leadName}`, "calendar", "visit");
-                    toast.success("Visit confirmed");
-                  }}
+                  disabled={(a.status || "Pending") === "Confirmed"}
+                  onClick={() => void updateAppointmentStatus(a, "Confirmed")}
                 >
                   Confirm
                 </Button>
                 <Button
                   size="sm"
                   variant="outline"
-                  disabled={a.status === "Completed"}
-                  onClick={() => {
-                    updateAppointment(a.id, { status: "Completed", updatedAt: Date.now() });
-                    void updateAppointmentRecord(a.id, { status: "Completed", updatedAt: Date.now() });
-                    pushActivity(`Appointment completed: ${a.leadName}`, "calendar", "visit");
-                    toast.success("Appointment completed");
-                  }}
+                  disabled={(a.status || "Pending") === "Completed"}
+                  onClick={() => void updateAppointmentStatus(a, "Completed")}
                 >
                   Complete
                 </Button>
@@ -1087,21 +1338,17 @@ export function AppointmentsSection() {
                   size="sm"
                   variant="ghost"
                   className="text-destructive"
-                  disabled={a.status === "Cancelled"}
-                  onClick={() => {
-                    updateAppointment(a.id, { status: "Cancelled", updatedAt: Date.now() });
-                    void updateAppointmentRecord(a.id, { status: "Cancelled", updatedAt: Date.now() });
-                    pushActivity(`Appointment cancelled: ${a.leadName}`, "calendar", "visit");
-                    toast.error("Appointment cancelled");
-                  }}
+                  disabled={(a.status || "Pending") === "Cancelled"}
+                  onClick={() => void updateAppointmentStatus(a, "Cancelled")}
                 >
                   Cancel
                 </Button>
               </div>
             </div>
           </GlowCard>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent className="max-h-[96vh] w-[calc(100vw-1rem)] overflow-y-auto border-white/10 bg-slate-950 text-white sm:max-w-5xl">
@@ -1269,10 +1516,10 @@ export function AppointmentsSection() {
                     <Select value={form.propertyInterested} onValueChange={(value) => setForm((prev) => ({ ...prev, propertyInterested: value }))}>
                       <SelectTrigger className="bg-black/40 border-white/10 text-white"><SelectValue placeholder="Select property" /></SelectTrigger>
                       <SelectContent>
-                        {properties.length ? (
-                          properties.map((p) => (
+                        {safeProperties.length ? (
+                          safeProperties.map((p) => (
                             <SelectItem key={p.id} value={p.id}>
-                              {p.title} • {p.city}, {p.country}
+                              {p.title || "Untitled property"} • {p.city || "City N/A"}, {p.country || "Country N/A"}
                             </SelectItem>
                           ))
                         ) : (
@@ -1340,7 +1587,7 @@ export function AppointmentsSection() {
               <Button variant="ghost" onClick={() => setReschedId(null)}>
                 Cancel
               </Button>
-              <Button onClick={submitReschedule}>Save</Button>
+              <Button onClick={() => void submitReschedule()}>Save</Button>
             </div>
           </div>
         </DialogContent>
